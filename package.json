@@ -1,0 +1,27 @@
+{
+  "name": "siyuan-quick-notes",
+  "version": "0.1.15",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite build --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build": "node scripts/build.mjs && node scripts/verify-package.mjs",
+    "check": "npm run typecheck && npm test && npm run build"
+  },
+  "dependencies": {
+    "@codemirror/commands": "^6.8.1",
+    "@codemirror/lang-markdown": "^6.3.3",
+    "@codemirror/state": "^6.5.2",
+    "@codemirror/view": "^6.38.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "fflate": "^0.8.2",
+    "siyuan": "1.2.7",
+    "typescript": "~5.8.3",
+    "vite": "^6.3.5",
+    "vitest": "^3.2.4"
+  }
+}

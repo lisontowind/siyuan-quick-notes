@@ -1,0 +1,22 @@
+:root { --paper:#faf9f5; --text:#33332f; --muted:#797970; --line:#deddd5; --accent:#39756b; --selection:#bcd9d1; color-scheme:light; }
+:root[data-theme=dark] { --paper:#242522; --text:#e4e5dc; --muted:#aaac9f; --line:#40423a; --accent:#91cbbc; --selection:#38544d; color-scheme:dark; }
+* { box-sizing:border-box; }
+html, body { margin:0; height:100%; overflow:hidden; background:var(--paper); color:var(--text); font:14px "Segoe UI", "Microsoft YaHei", sans-serif; }
+body { display:flex; flex-direction:column; border:1px solid var(--line); }
+.toolbar { display:flex; align-items:center; gap:2px; padding:5px 7px; height:37px; flex-shrink:0; border-bottom:1px solid var(--line); -webkit-app-region:drag; }
+#title { flex:1; min-width:15px; font-size:12px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding-left:5px; }
+button { -webkit-app-region:no-drag; border:0; border-radius:4px; color:inherit; background:transparent; cursor:pointer; font:inherit; }
+.toolbar button { display:grid; place-items:center; width:28px; height:28px; padding:0; line-height:1; flex-shrink:0; }
+.toolbar button svg { display:block; width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; pointer-events:none; }
+button:hover { background:var(--line); }
+button:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+button:disabled { opacity:.35; cursor:default; }
+#pin[aria-pressed=true] { color:var(--accent); background:var(--selection); }
+#close:hover { background:#b54545; color:white; }
+#editor { flex:1; min-height:0; overflow:hidden; }
+#status { padding:5px 12px; font-size:11px; color:var(--muted); border-top:1px solid var(--line); max-height:62px; overflow:auto; flex-shrink:0; }
+#status[data-phase=error], #status[data-phase=conflict] { color:#c66045; }
+#actions { position:absolute; top:38px; right:7px; z-index:10; background:var(--paper); border:1px solid var(--line); box-shadow:0 4px 15px #0002; border-radius:5px; padding:5px; width:230px; }
+#actions button { display:block; width:100%; text-align:left; font-size:12px; padding:8px; }
+[hidden] { display:none !important; }
+#actions .danger { color:#e76b6b; }

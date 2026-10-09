@@ -1,0 +1,16 @@
+node_modules/
+dist/
+package.zip
+.vite/
+coverage/
+artifacts/
+.npm-cache/
+*.log
+*.tmp
+.env
+.env.*
+!.env.example
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
