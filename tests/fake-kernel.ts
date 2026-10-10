@@ -2,6 +2,8 @@ import type { KernelTransport } from '../src/types';
 export class FakeKernel implements KernelTransport {
   notebook = '20261010000000-book001';
   docs = new Map<string, string>();
+  docPaths = new Map<string, string>();
+  docTitles = new Map<string, string>();
   blocks = new Map<string, { raw: string; root_id: string }>();
   calls: Array<{ path: string; body: any }> = [];
   fail?: string;
@@ -14,6 +16,8 @@ export class FakeKernel implements KernelTransport {
     if (this.fail === path) throw new Error('kernel offline');
     let result: unknown;
     switch (path) {
+      case '/api/filetree/getHPathByID': result = this.docPaths.get(body.id) || [...this.docs].find(([, id]) => id === body.id)?.[0]; break;
+      case '/api/attr/getBlockAttrs': result = { title: this.docTitles.get(body.id) || (this.docPaths.get(body.id) || [...this.docs].find(([, id]) => id === body.id)?.[0])?.split('/').pop() }; break;
       case '/api/sqlite/flushTransaction': result = null; break;
       case '/api/block/deleteBlock': {
         this.blocks.delete(body.id); result = [];
@@ -23,8 +27,9 @@ export class FakeKernel implements KernelTransport {
       case '/api/template/renderSprig': result = body.template.replace('{{now | date "2006/01"}}', '2026/10').replace('{{now | date "20060102150405"}}', '20261010035000'); break;
       case '/api/filetree/getIDsByHPath': result = this.docs.has(body.path) ? [this.docs.get(body.path)] : []; break;
       case '/api/filetree/createDocWithMd': {
-        const id = `20261010000000-d${String(this.docs.size + 1).padStart(6, '0')}`;
+        const id = body.id || `20261010000000-d${String(this.docs.size + 1).padStart(6, '0')}`;
         this.docs.set(body.path, id); result = id;
+        if (body.markdown) this.blocks.set(id, { raw: body.markdown, root_id: id });
         if (this.lostCreate) { this.lostCreate = false; throw new Error('lost create response'); }
         break;
       }

@@ -19,7 +19,7 @@ class FakeTray {
 }
 function setup() {
   FakeTray.instances = [];
-  const actions: TrayActions = { createNote: vi.fn(), recent: vi.fn(), settings: vi.fn(), windows: vi.fn(() => []), focusWindow: vi.fn(), showOwner: vi.fn() };
+  const actions: TrayActions = { createNote: vi.fn(), recent: vi.fn(), settings: vi.fn(), closeTray: vi.fn(), windows: vi.fn(() => []), focusWindow: vi.fn(), showOwner: vi.fn() };
   const report = vi.fn();
   const contents = Object.assign(new EventEmitter(), { isDestroyed: (): boolean => false });
   const remote = { Tray: FakeTray, Menu: { buildFromTemplate: vi.fn((template: any) => template) },
@@ -29,6 +29,14 @@ function setup() {
   return { actions, report, remote, adapter, owner, contents };
 }
 describe('independent quick-note tray', () => {
+  it('closes only the plugin tray from the context menu and rejects stale callbacks', () => {
+    const { adapter, actions } = setup(); actions.closeTray = vi.fn(() => adapter.stop());
+    adapter.start('tray.ico', 'Test'); const tray = FakeTray.instances[0];
+    tray.handlers.get('right-click')!(); const close = tray.menus[0].find((item: any) => item.label === '关闭托盘图标');
+    close.click(); expect(actions.closeTray).toHaveBeenCalledOnce(); expect(tray.destroyed).toBe(true);
+    close.click(); expect(actions.closeTray).toHaveBeenCalledOnce();
+    expect(actions.showOwner).not.toHaveBeenCalled(); expect(actions.createNote).not.toHaveBeenCalled();
+  });
   it.each(['destroyed', 'render-process-gone', 'did-navigate'])('destroys the icon on native owner %s without DOM or plugin unload', event => {
     const { adapter, actions, remote, contents } = setup(); adapter.start('tray.ico', 'Test');
     expect(remote.require).toHaveBeenCalledWith('/plugin/tray-lifetime.cjs');

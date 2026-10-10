@@ -9,9 +9,11 @@ const windowId = params.get('windowId') ?? '';
 const channelName = params.get('channel') ?? '';
 const $ = (id: string) => document.getElementById(id)!;
 const status = $('status');
+const titleDisplay = $('title-display');
 if (!session || !windowId || !channelName.startsWith('siyuan-quick-notes:')) throw new Error('缺少速记会话信息');
 const channel = new BroadcastChannel(channelName);
 let revision = 0, connected = false, lastSent = '', pendingAction: Request['action'] | undefined;
+let latestState: WindowState | undefined;
 let editTimer: ReturnType<typeof setTimeout> | undefined;
 let lastHeard = Date.now(), reloadConfirmed = false, frozen = false, stopped = false;
 let disconnected = false, closeConfirmed = false, resendEdit = false;
@@ -23,15 +25,24 @@ function closeMenu(): void {
   menu.hidden = true; more.setAttribute('aria-expanded', 'false');
   clearTimeout(reloadConfirmTimer); reloadConfirmed = false; $('reload').textContent = '重新载入原文';
 }
-const editor = new QuickNoteEditor($('editor'), () => {
+const composing = () => editor.composing;
+function changed(): void {
   clearTimeout(editTimer);
-  if (!editor.composing && !frozen) editTimer = setTimeout(sendEdit, 120);
-  status.hidden = false; status.textContent = '正在编辑…'; status.dataset.phase = 'dirty';
-}, () => {
+  if (!composing() && !frozen) editTimer = setTimeout(sendEdit, 120);
+  status.hidden = false;
+  const presentation = latestState ? presentStatus(latestState, revision, true) : { text: '正在编辑…', phase: 'dirty' };
+  status.textContent = presentation.text; status.title = presentation.text; status.dataset.phase = presentation.phase;
+}
+function compositionEnded(): void {
+  if (composing()) return;
   if (collectionId) { collect(collectionId); return; }
   sendEdit();
   if (pendingAction) { const kind = pendingAction; pendingAction = undefined; action(kind); }
-}, () => action('save'));
+}
+const editor = new QuickNoteEditor($('editor'), changed, compositionEnded, () => action('save'));
+function setEditable(enabled: boolean): void {
+  editor.setEditable(enabled);
+}
 
 function request(action: Request['action'], extra: Partial<Request> = {}): void {
   if (stopped) return;
@@ -39,10 +50,13 @@ function request(action: Request['action'], extra: Partial<Request> = {}): void 
 }
 function sendEdit(): boolean {
   clearTimeout(editTimer);
-  if (!connected || disconnected || editor.composing || frozen || stopped) return false;
+  if (!connected || disconnected || composing() || frozen || stopped) return false;
   const text = editor.getText();
   if (text.length > 2_000_000) { showError('速记超过 200 万字符，当前内容未提交。请拆分或复制保留。'); return false; }
-  if (resendEdit || text !== lastSent) { resendEdit = false; lastSent = text; request('edit', { text, revision: ++revision }); }
+  if (resendEdit || text !== lastSent) {
+    resendEdit = false; lastSent = text;
+    request('edit', { text, revision: ++revision });
+  }
   return true;
 }
 function showError(text: string): void { status.hidden = false; status.textContent = text; status.dataset.phase = 'error'; }
@@ -64,7 +78,7 @@ function action(kind: Request['action']): void {
   if (stopped || disconnected) { if (kind === 'close') closeDisconnected(); return; }
   if (!connected) { showError('尚未连接插件，请稍后重试'); return; }
   if (frozen) return;
-  if (editor.composing) { pendingAction = kind; return; }
+  if (composing()) { pendingAction = kind; return; }
   if (sendEdit()) request(kind);
 }
 function collect(requestId: string): void {
@@ -72,27 +86,30 @@ function collect(requestId: string): void {
   collectionId = requestId; pendingAction = undefined; clearTimeout(editTimer);
   if (!connected) { request('collected', { requestId, error: '窗口尚未完成初始化，内容未确认' }); return; }
   // Let the IME finish before freezing; shutdown waits for this explicit snapshot, not a sleep.
-  if (editor.composing) return;
-  frozen = true; editor.setEditable(false);
+  if (composing()) return;
+  frozen = true; setEditable(false);
   const text = editor.getText();
   if (text.length > 2_000_000) { request('collected', { requestId, error: '速记超过 200 万字符，草稿未提交，请复制文本' }); return; }
   if (text !== lastSent) { lastSent = text; revision++; }
   request('collected', { requestId, text, revision });
 }
 function render(state: WindowState, content?: NoteContent): void {
+  latestState = state;
   if (content && (!connected || content.revision > revision)) {
-    revision = content.revision; lastSent = content.text; editor.setText(content.text);
-    if (!connected) { connected = true; editor.setEditable(!frozen); editor.focus(); }
+    revision = content.revision; lastSent = content.text;
+    editor.setText(content.text);
+    if (!connected) { connected = true; setEditable(!frozen); editor.focus(); }
   }
   document.documentElement.dataset.theme = state.dark ? 'dark' : 'light';
   $('pin').setAttribute('aria-pressed', String(state.pinned));
   $('pin').title = state.pinned ? '取消置顶' : '置顶';
   $('pin').setAttribute('aria-label', $('pin').title);
-  $('title').textContent = state.title;
-  $('title').title = state.title;
-  document.title = `${state.title} · 悬浮速记`;
+  titleDisplay.textContent = state.docTitle || '新速记';
+  titleDisplay.title = `${titleDisplay.textContent} · 拖动移动窗口`;
+  document.title = `${titleDisplay.textContent} · 悬浮速记`;
   const presentation = presentStatus(state, revision, editor.getText() !== lastSent);
   status.dataset.phase = presentation.phase; status.textContent = presentation.text; status.hidden = presentation.hidden;
+  status.title = presentation.text;
   $('close-draft').title = state.localRevision >= revision ? '本机草稿已落盘，可关闭后恢复' : '先确保本机草稿落盘再关闭';
   $('open').toggleAttribute('disabled', !state.docId); $('reload').toggleAttribute('disabled', !state.docId);
 }
@@ -104,16 +121,16 @@ channel.onmessage = event => {
   if (recovered) {
     disconnected = false; resetCloseConfirmation();
     for (const id of pluginActions) $(id).toggleAttribute('disabled', false);
-    editor.setEditable(connected && !frozen); resendEdit = true;
+    setEditable(connected && !frozen); resendEdit = true;
   }
   if (response.state) render(response.state, response.content);
   if (response.focus) editor.focus();
   if (response.flush) action('close');
   if (response.collect && response.requestId) collect(response.requestId);
-  if (response.resume) { collectionId = undefined; frozen = false; editor.setEditable(connected); }
+  if (response.resume) { collectionId = undefined; frozen = false; setEditable(connected); }
   if (response.stopped) {
     closeMenu();
-    stopped = true; frozen = true; collectionId = undefined; editor.setEditable(false);
+    stopped = true; frozen = true; collectionId = undefined; setEditable(false);
     clearInterval(readyTimer); clearTimeout(editTimer); showError(response.stopped);
     for (const id of pluginActions) $(id).setAttribute('disabled', '');
     channel.close();
@@ -150,7 +167,7 @@ const readyTimer = setInterval(() => {
   request(connected ? 'heartbeat' : 'ready');
   if (!disconnected && Date.now() - lastHeard > 6000) {
     disconnected = true; pendingAction = undefined; clearTimeout(editTimer); closeMenu();
-    editor.setEditable(false);
+    setEditable(false);
     for (const id of pluginActions) $(id).setAttribute('disabled', '');
     showError('与插件失去连接，当前输入可能尚未保存。请复制文本后点击关闭。');
   }

@@ -3,7 +3,7 @@ import type { DesktopAdapter, NativeWindow } from '../platform/desktop';
 import { LocalDraftStore } from '../platform/drafts';
 import { NoteRepository } from '../services/repository';
 import { AutoSaveService, message } from '../services/autosave';
-import { createNote, noteReference, noteSummary } from './identity';
+import { createNote, noteReference, noteLabel } from './identity';
 import { SerialQueue, TriggerGate } from './serial';
 import { validRequest } from './protocol';
 
@@ -146,7 +146,7 @@ export class QuickNoteWindowManager {
     const entry = this.windows.get(id); if (!entry) return;
     const note = entry.service.note;
     const state: WindowState = { revision: note.revision, savedRevision: note.savedRevision, docId: note.docId,
-      title: noteSummary(note.text, 40, '新速记'), phase: entry.service.phase, error: entry.service.error,
+      title: noteLabel(note, 40, '新速记'), docTitle: note.docTitle || note.docPath?.split('/').pop() || note.target?.path.split('/').pop(), phase: entry.service.phase, error: entry.service.error,
       localRevision: entry.service.localRevision, pinned: this.bounds(entry).pinned, dark: this.dark, showSaved: this.settings().showSaved };
     this.send({ windowId: id, requestId, state, ...(content ? { content: { text: note.text, revision: note.revision } } : {}) });
   }
@@ -161,7 +161,7 @@ export class QuickNoteWindowManager {
       case 'collected': await this.acceptCollection(req); return;
       case 'edit': {
         const id = req.windowId, requestId = req.requestId;
-        void service.edit(req.text!, req.revision!).then(() => this.publish(id, requestId)).catch(error => this.report(message(error)));
+        void service.edit(req.text!, req.revision!, true, req.title).then(() => this.publish(id, requestId)).catch(error => this.report(message(error)));
         return;
       }
       case 'save': await service.flush(); break;
@@ -171,7 +171,7 @@ export class QuickNoteWindowManager {
       case 'pin': entry.native?.setAlwaysOnTop(!this.bounds(entry).pinned); this.scheduleState(); break;
       case 'minimize': entry.native?.minimize(); break;
       case 'new': await this.open(createNote()); break;
-      case 'open': if (await service.flush() && service.note.docId) this.openDoc(service.note.blockId); break;
+      case 'open': if (await service.flush() && service.note.docId) this.openDoc(service.note.docId); break;
       case 'recent': this.showRecent(); break;
       case 'reload': {
         if (entry.closing) break;
@@ -205,8 +205,9 @@ export class QuickNoteWindowManager {
     if (!pending || pending.requestId !== req.requestId || !entry) return;
     let safe = false;
     if (req.error) { entry.service.error = req.error; entry.service.phase = 'error'; }
-    else if (req.revision! >= entry.service.note.revision && (req.revision !== entry.service.note.revision || req.text === entry.service.note.text)) {
-      const edit = entry.service.edit(req.text!, req.revision!, false);
+    else if (req.revision! >= entry.service.note.revision && (req.revision !== entry.service.note.revision
+      || (req.text === entry.service.note.text && (req.title === undefined || req.title === (entry.service.note.title ?? ''))))) {
+      const edit = entry.service.edit(req.text!, req.revision!, false, req.title);
       safe = await entry.service.closeToDraft(); await edit;
     } else { entry.service.error = '窗口内容版本不一致，已保留窗口'; entry.service.phase = 'error'; }
     // Timeout may already have resolved the collection. A late acknowledgement cannot close a window.
@@ -232,18 +233,17 @@ export class QuickNoteWindowManager {
       if (this.windows.has(id) && !this.tearingDown) { entry.closing = false; entry.service.resume(); this.send({ windowId: id, resume: true }); }
     }
   }
-  private async finishClose(id: string): Promise<void> {
+  private async finishClose(id: string, persist = true): Promise<void> {
     const entry = this.windows.get(id); if (!entry) return;
     this.geometries[id] = { ...this.bounds(entry), open: false,
       ...(entry.service.note.docId ? { note: noteReference(entry.service.note) } : {}) };
     entry.closing = true; entry.service.dispose(); this.windows.delete(id);
     if (entry.native && !entry.native.isDestroyed()) entry.native.destroy();
-    await this.persistState();
+    if (persist) await this.persistState();
   }
   private record(note: NoteRecord): void {
     if (!note.docId || note.savedRevision <= 0) return;
-    const record: HistoryRecord = { id: note.id, blockId: note.blockId, docId: note.docId, target: note.target,
-      createdAt: note.createdAt, updatedAt: note.updatedAt, summary: noteSummary(note.text) };
+    const record: HistoryRecord = { ...noteReference(note), summary: noteLabel(note) };
     this.scheduleState();
     const index = this.history.findIndex(item => item.id === note.id);
     if (index >= 0 && this.history[index].updatedAt === record.updatedAt && this.history[index].summary === record.summary) return;
@@ -281,16 +281,10 @@ export class QuickNoteWindowManager {
         if (!await this.collect(item.id)) return false;
         await entry.service.delete();
       } else {
-        const draft = (await this.drafts.list()).find(value => value.note.id === item.id);
-        await this.repo.delete(draft?.note ?? item);
         await this.drafts.remove(item.id);
       }
-      const index = this.history.findIndex(value => value.id === item.id);
-      if (index >= 0) this.history.splice(index, 1);
-      await this.metadataQueue.run('history', () => this.persistHistory([...this.history])).catch(error => this.report(`速记已删除，最近列表落盘失败：${message(error)}`));
-      if (entry) await this.finishClose(item.id);
-      delete this.geometries[item.id];
-      await this.persistState();
+      if (entry) await this.finishClose(item.id, false);
+      await this.forgetNote(item.id);
       return true;
     } finally {
       completed?.(); if (work) this.deletionWork.delete(work);
@@ -300,6 +294,13 @@ export class QuickNoteWindowManager {
         entry.closing = false; entry.service.resume(); this.send({ windowId: item.id, resume: true });
       }
     }
+  }
+  async forgetNote(id: string): Promise<void> {
+    const index = this.history.findIndex(value => value.id === id);
+    if (index >= 0) this.history.splice(index, 1);
+    await this.metadataQueue.run('history', () => this.persistHistory([...this.history])).catch(error => this.report(`速记已删除，最近列表落盘失败：${message(error)}`));
+    delete this.geometries[id];
+    await this.persistState();
   }
   refresh(): void { for (const id of this.windows.keys()) this.publish(id); }
   dispose(): Promise<void> { return this.disposal ??= this.stop(); }

@@ -3,6 +3,7 @@ import type * as Fs from 'node:fs/promises';
 import type * as Path from 'node:path';
 import { SerialQueue } from '../core/serial';
 import { validBlockId } from '../services/repository';
+import { validNoteTitle } from '../core/identity';
 
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 export function validNoteReference(value: unknown): value is NoteReference {
@@ -11,6 +12,9 @@ export function validNoteReference(value: unknown): value is NoteReference {
   return typeof note.id === 'string' && uuid.test(note.id) && typeof note.blockId === 'string' && validBlockId(note.blockId)
     && typeof note.docId === 'string' && validBlockId(note.docId)
     && Number.isFinite(note.createdAt) && Number.isFinite(note.updatedAt)
+    && validNoteTitle(note.title) && (note.docTitle === undefined || typeof note.docTitle === 'string') && (note.docPath === undefined || typeof note.docPath === 'string')
+    && (note.storage === undefined || note.storage === 'document' || note.storage === 'superblock')
+    && (note.storage !== 'document' || note.docId === note.blockId)
     && (note.target === undefined || (!!note.target && typeof note.target.notebook === 'string' && validBlockId(note.target.notebook)
       && typeof note.target.path === 'string' && note.target.path.startsWith('/')));
 }
@@ -24,6 +28,9 @@ export function validGeometry(value: unknown): value is import('../types').Geome
 export function validDraft(value: unknown): value is Draft {
   const note = (value as Draft | undefined)?.note;
   return !!note && uuid.test(note.id) && validBlockId(note.blockId) && typeof note.text === 'string'
+    && validNoteTitle(note.title) && (note.docTitle === undefined || typeof note.docTitle === 'string') && (note.docPath === undefined || typeof note.docPath === 'string')
+    && (note.storage === undefined || note.storage === 'document' || note.storage === 'superblock')
+    && (note.storage !== 'document' || !note.docId || note.docId === note.blockId)
     && Number.isSafeInteger(note.revision) && note.revision >= 0 && Number.isSafeInteger(note.savedRevision) && note.savedRevision >= 0 && note.savedRevision <= note.revision
     && Number.isFinite(note.createdAt) && Number.isFinite(note.updatedAt)
     && (!note.target || (validBlockId(note.target.notebook) && typeof note.target.path === 'string' && note.target.path.startsWith('/')))

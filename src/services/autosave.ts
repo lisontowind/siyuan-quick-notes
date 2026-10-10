@@ -1,6 +1,7 @@
 import type { Draft, DraftStore, Geometry, NoteRecord, SavePhase } from '../types';
 import { ConflictError, UncertainWriteError, type NoteRepository } from './repository';
 import { SerialQueue } from '../core/serial';
+import { migrateNoteTitle } from '../core/identity';
 
 export class AutoSaveService {
   phase: SavePhase;
@@ -21,12 +22,13 @@ export class AutoSaveService {
   constructor(public note: NoteRecord, private repo: NoteRepository, private drafts: DraftStore,
     private delay: () => number, private notify: () => void, private geometry: () => Geometry,
     private saved: (note: NoteRecord) => void = () => {}) {
+    this.note = migrateNoteTitle(note);
     this.phase = note.revision > note.savedRevision ? 'dirty' : note.docId ? 'saved' : 'empty';
   }
-  edit(text: string, revision: number, schedule = true): Promise<void> {
+  edit(text: string, revision: number, schedule = true, title = this.note.title ?? ''): Promise<void> {
     if (this.disposed || this.deleting || !Number.isSafeInteger(revision) || revision <= this.note.revision) return Promise.resolve();
-    this.note = { ...this.note, text, revision, updatedAt: Date.now() };
-    if (schedule && text.trim() && !this.note.target && !this.targetResolution) {
+    this.note = migrateNoteTitle({ ...this.note, text, title, revision, updatedAt: Date.now() });
+    if (schedule && this.note.text.trim() && !this.note.target && !this.targetResolution) {
       this.targetResolution = this.repo.resolveTarget(structuredClone(this.note)).then(async target => {
         if (this.disposed) return;
         this.note.target = target;
@@ -95,13 +97,14 @@ export class AutoSaveService {
         snapshot.target ??= this.note.target;
         await this.repo.save(snapshot, async () => {
           if (this.disposed) throw new Error('插件已停止，未完成内容保留为恢复草稿');
-          this.note.target = snapshot.target; this.note.docId = snapshot.docId;
+          this.note.target = snapshot.target; this.note.docId = snapshot.docId; this.note.blockId = snapshot.blockId;
+          this.note.storage = snapshot.storage; this.note.baseline = snapshot.baseline; this.note.docPath = snapshot.docPath; this.note.docTitle = snapshot.docTitle;
           if (!await this.persist()) throw new Error('恢复草稿未落盘，已停止内核写入');
           if (this.disposed) throw new Error('插件已停止，未完成内容保留为恢复草稿');
         });
         // A late kernel response must not remove or rewrite the shutdown recovery snapshot.
         if (this.disposed) return false;
-        this.note.target = snapshot.target; this.note.docId = snapshot.docId; this.note.baseline = snapshot.baseline;
+        this.note.target = snapshot.target; this.note.docId = snapshot.docId; this.note.docPath = snapshot.docPath; this.note.docTitle = snapshot.docTitle; this.note.baseline = snapshot.baseline;
         this.note.savedRevision = snapshot.revision;
         snapshot.savedRevision = snapshot.revision; this.saved(snapshot);
         if (this.note.revision === snapshot.revision) {
@@ -178,18 +181,15 @@ export class AutoSaveService {
   cleanSavedDraft(): Promise<void> { return this.removeDraft(); }
   async delete(): Promise<void> {
     this.pause(); this.deleting = true;
-    let kernelDeleted = false;
     try {
       await this.saves.run(this.note.id, async () => {
         await this.targetResolution;
         await this.writePump;
-        await this.repo.delete(this.note);
-        kernelDeleted = true;
         await this.localWrites.run(this.note.id, () => this.drafts.remove(this.note.id));
         this.dispose();
       });
     } catch (error) {
-      this.deleting = false; this.phase = kernelDeleted ? 'conflict' : 'error'; this.error = `删除失败：${message(error)}`;
+      this.deleting = false; this.phase = 'error'; this.error = `删除失败：${message(error)}`;
       this.notify(); throw error;
     }
   }

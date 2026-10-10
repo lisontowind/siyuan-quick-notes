@@ -52,5 +52,9 @@ describe('configuration and coordination', () => {
     expect(validRequest({ ...request, action: 'collected', text: undefined, revision: undefined, error: 'IME not ready' }, 'one')).toBe(true);
     expect(validRequest({ ...request, action: 'collected', text: undefined }, 'one')).toBe(false);
     expect(validRequest({ ...request, action: 'collected', text: 'x'.repeat(2_000_001) }, 'one')).toBe(false);
+    expect(validRequest({ ...request, title: '中文标题' }, 'one')).toBe(true);
+    expect(validRequest({ ...request, title: 123 }, 'one')).toBe(false);
+    expect(validRequest({ ...request, title: 'x'.repeat(201) }, 'one')).toBe(false);
+    expect(validRequest({ ...request, title: 'two\nlines' }, 'one')).toBe(false);
   });
 });

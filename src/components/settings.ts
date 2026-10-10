@@ -57,9 +57,9 @@ export function createSettings(settings: Settings, notebooks: Notebook[], save: 
   }
   button('全局快捷键', '打开思源快捷键设置', shortcuts, '默认 Ctrl + Alt + N。在思源快捷键设置中搜索“新建悬浮速记”，统一管理绑定。');
   field('shortcutBehavior', '快捷键行为', select([['new', '新建速记'], ['recent', '唤醒最近窗口']]));
-  field('trayEnabled', '显示独立速记托盘图标', input('checkbox'), '左键新建速记；右键打开最近记录、窗口管理和设置。不修改思源原有托盘。');
+  field('trayEnabled', '显示独立速记托盘图标', input('checkbox'), '左键新建速记；右键打开最近记录、窗口管理和设置，也可关闭此图标。关闭后可在这里重新开启。不修改思源原有托盘。');
   field('notebook', '目标笔记本', select([['', '请选择笔记本'], ...notebooks.map(n => [n.id, n.name] as [string, string])]));
-  field('directory', '保存目录（支持模板变量）', input('text'), '默认模板：<code class="qn-template-example">/闪念速记/{{now | date "20060102150405"}}</code>。模板结果直接作为文档路径，相同路径的速记追加到同一文档；不含模板变量时，在目录下为每条速记新建文档。首次输入时确定路径，修改设置只影响新速记。');
+  field('directory', '保存目录（支持模板变量）', input('text'), '默认模板：<code class="qn-template-example">/闪念速记/{{now | date "20060102150405"}}</code>。模板结果直接作为文档路径，同一路径的便签以各自的竖向超级块追加保存。不含模板变量时，在目录下生成时间与编号文档名。左上角显示文档标题。首次输入时确定路径，修改设置只影响新速记。');
   const previewRow = document.createElement('div'); previewRow.className = 'qn-preview-row';
   const previewButton = document.createElement('button'); previewButton.className = 'b3-button b3-button--outline'; previewButton.textContent = '预览保存位置';
   previewButton.onclick = () => {

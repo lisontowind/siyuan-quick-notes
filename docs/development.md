@@ -1,5 +1,17 @@
 # 开发与构建
 
+0.1.16 删除仅清理插件草稿、历史及窗口索引，不再提供内核块删除方法。等待已经开始的保存结束后清理本机记录，之后停止该便签的保存服务；已关闭的记录删除无需访问内核。原生和降级窗口使用相同的插件删除语义。
+
+0.1.18 恢复按超级块保存，每条便签使用确定的独立 `blockId`，`docId` 是所在文档根 ID。外层使用 `{{{row`，Lute 生成 `data-sb-layout="row"`；本机思源样式默认以 `flex-direction: column` 上下排列，`col` 才是横向排列。模板结果直接作为文档路径，同一路径通过队列汇集多个超级块。首次保存先查找或创建空文档，再 `appendBlock` 写入便签；后续只 `updateBlock` 更新对应超级块，保留其他内容。创建、追加和更新响应丢失后按路径、容器身份与内容回读核对，避免重复写入。
+
+0.1.20 移除便签标题输入框，包括降级窗口。左上角仍显示文档标题并保留拖动区域，编辑器只传递正文与修订号。保留旧 `title` 数据字段和消息验证用于兼容：AutoSaveService 构造或收到旧版标题消息时通过 `migrateNoteTitle` 将标题转为正文开头的一级标题，转义 Markdown 标点并清空独立字段。转换不改变修订号或旧基线，属于内容表示的合并；正式内容回读使用完整正文，不再拆出带标记的首个标题，也不生成新的 custom-quick-note-titled 标记。旧正文的所有标题均可在编辑器中正常修改，保存、恢复和另存不会重复添加。
+
+旧版 `col` 容器核对 ID、custom-quick-note、所在根与基线后原位更新为 `row`，ID 保持不变。0.1.17 的 `storage: 'document'` 记录读取原文档并检查基线，然后复制为当前目标路径中的超级块，源文档保持原样；未创建成功的文档意图可直接转为超级块，已删除的源文档拒绝重建。新便签使用 `storage: 'superblock'`，无 storage 的旧记录仍按超级块处理。复制后的块 ID、路径、storage、docId 和基线通过保存意图回调落盘，恢复后重试沿用同一身份。
+
+保存和重新载入通过 `/api/attr/getBlockAttrs` 获取文档根的 `title`，0.1.19 起左上角及原生窗口标题使用此信息，不加书名号或完整路径。属性读取失败时回退到已知标题或路径末尾的文档名，不影响已确认的正文保存；`getHPathByID` 保留路径元数据用于恢复。底部只显示编辑、保存或错误状态，`showSaved` 关闭时隐藏成功提示；原生与降级窗口均不在底部重复显示文档标题。托盘菜单的关闭选项先确认设置写入成功，再关闭独立图标，可由设置重新开启。
+
+接口依据：[文档接口](https://github.com/siyuan-note/siyuan/blob/v3.8.6/kernel/api/filetree.go)、[块更新实现](https://github.com/siyuan-note/siyuan/blob/v3.8.6/kernel/model/block_update.go)、[思源 API](https://github.com/siyuan-note/siyuan/blob/v3.8.6/docs/API.zh-CN.md)。
+
 需要 Node.js 20.19 或更新的 Node 20/22 LTS、npm。
 
 ```sh
@@ -31,13 +43,13 @@ npm run build
 
 0.1.5 移除保存模式选项和 `getShorthandSavePath` 调用。插件在 Windows 桌面端初始化；保存目录含模板时调用 `/api/template/renderSprig`，请求为 `{ template: directory }`，使用返回字符串作为目录，再追加每条速记的时间戳与 ID。普通目录直接使用。渲染结果校验绝对逻辑路径、控制字符和路径段；模板错误不创建文档。解析后的目标写入草稿并固定，旧速记已存储的 target/docId 继续使用。旧设置中的 storageMode 被忽略，notebook/directory 保持兼容；原先依赖闪念配置且没有选定笔记本的用户需要在插件设置中选择目标笔记本。
 
-0.1.14 修正模板路径含义：含模板变量时，解析结果直接作为完整文档路径，不再追加时间戳与 ID 子文档。目标文档存在时追加独立速记容器，同路径新建通过原有队列串行处理，不覆盖其他速记或正文。普通目录仍追加每条速记的文档名；已落盘的 target/docId 不重算，旧版子文档继续原位编辑。模板结果为根路径 `/` 时拒绝保存，要求包含文档名。设置预览与保存共用解析结果。
+0.1.14 将模板结果直接作为完整文档路径，向同一文档追加速记容器。0.1.17 曾改为每条便签一个独立文档，0.1.18 恢复汇集容器。模板结果为根路径 `/` 时仍拒绝保存，要求包含文档名。设置预览与保存共用解析结果。
 
 依据：[思源 3.8.6 模板 API](https://github.com/siyuan-note/siyuan/blob/v3.8.6/kernel/api/template.go)、[模板解析实现](https://github.com/siyuan-note/siyuan/blob/v3.8.6/kernel/model/template.go)。
 
-0.1.6 删除通过 `/api/block/deleteBlock` 仅删除速记容器，保留整篇文档。删除前核对容器的块 ID 与 custom-quick-note，前后通过 `/api/sqlite/flushTransaction` 刷新查询索引；响应丢失后查询确认块不存在才清理本机草稿与元数据。依据：[思源块删除 API](https://github.com/siyuan-note/siyuan/blob/v3.8.6/docs/API.zh-CN.md#删除块)。
+历史版本 0.1.6 曾通过 `/api/block/deleteBlock` 删除速记容器。0.1.16 起完全取消内核删除，删除便签只清理插件相关数据。
 
-保存前和写入后核对容器与正文，使用宿主 Lute 规范化 Markdown。内核没有 CAS 条件写入，不保证跨客户端原子修改。移动端 `moveLocalShorthands` 只负责导入已有本机速记，不作为正文入口。
+保存前核对容器身份、所属文档与对应正文基线，写入后回读核对内容，使用宿主 Lute 规范化 Markdown。内核没有 CAS 条件写入，不保证跨客户端原子修改。移动端 `moveLocalShorthands` 只负责导入已有本机速记，不作为正文入口。
 
 品牌原图位于 `assets/`，集市图标与题头图为根目录 `icon.png`、`preview.png`。托盘构建从 `assets/tray-16.png`、`tray-32.png`、`tray-48.png` 组装 ICO；生成提示见 [品牌素材记录](branding.md)。
 

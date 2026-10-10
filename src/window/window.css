@@ -4,7 +4,7 @@
 html, body { margin:0; height:100%; overflow:hidden; background:var(--paper); color:var(--text); font:14px "Segoe UI", "Microsoft YaHei", sans-serif; }
 body { display:flex; flex-direction:column; border:1px solid var(--line); }
 .toolbar { display:flex; align-items:center; gap:2px; padding:5px 7px; height:37px; flex-shrink:0; border-bottom:1px solid var(--line); -webkit-app-region:drag; }
-#title { flex:1; min-width:15px; font-size:12px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding-left:5px; }
+#title-display { flex:1; min-width:15px; height:26px; padding:3px 5px; line-height:20px; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; user-select:none; cursor:move; -webkit-app-region:drag; }
 button { -webkit-app-region:no-drag; border:0; border-radius:4px; color:inherit; background:transparent; cursor:pointer; font:inherit; }
 .toolbar button { display:grid; place-items:center; width:28px; height:28px; padding:0; line-height:1; flex-shrink:0; }
 .toolbar button svg { display:block; width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; pointer-events:none; }

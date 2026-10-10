@@ -8,11 +8,12 @@ vi.mock('../src/window/editor', () => ({ QuickNoteEditor: class {
   setEditable(value: boolean) { editor.enabled = value; } focus() {} destroy() {}
 } }));
 class Element {
+  value = ''; disabled = false; readOnly = false;
   textContent = ''; hidden = false; dataset: Record<string, string> = {}; attributes = new Map<string, string>();
-  listeners = new Map<string, () => void>();
+  listeners = new Map<string, (event?: any) => void>();
   children = new Set<Element>(); focus = vi.fn();
   contains(target: Element): boolean { return target === this || this.children.has(target); }
-  addEventListener(name: string, listener: () => void) { this.listeners.set(name, listener); }
+  addEventListener(name: string, listener: (event?: any) => void) { this.listeners.set(name, listener); }
   setAttribute(name: string, value: string) { this.attributes.set(name, value); }
   toggleAttribute(name: string, enabled: boolean) { if (enabled) this.attributes.set(name, ''); else this.attributes.delete(name); }
 }
@@ -40,6 +41,16 @@ beforeEach(async () => {
 });
 afterEach(() => { windowListeners.get('beforeunload')?.(); vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 describe('renderer close protocol', () => {
+  it('shows the document title in the draggable header and edits only the body', () => {
+    response({ state: { ...state, docTitle: '编号文档' }, content: { text: '# 旧标题\n\n正文', revision: 1 } });
+    expect(elements.get('title-display')!.textContent).toBe('编号文档');
+    expect(elements.has('note-title')).toBe(false); expect(editor.text).toBe('# 旧标题\n\n正文');
+    editor.text = 'body edit'; editor.changed();
+    expect(elements.get('status')!.textContent).toBe('正在编辑…');
+    response({ state: { ...state, docTitle: '重命名后的文档' } });
+    expect(elements.get('title-display')!.textContent).toBe('重命名后的文档');
+    expect(editor.text).toBe('body edit');
+  });
   it('keeps disconnected text selectable and closes only after an explicit second click', async () => {
     initialize(); editor.text = 'unsaved before update'; editor.changed();
     await vi.advanceTimersByTimeAsync(7500);

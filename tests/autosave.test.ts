@@ -19,6 +19,44 @@ function setup() {
 }
 afterEach(() => vi.useRealTimers());
 describe('autosave and recovery', () => {
+  it('keeps a recovered draft title in the editable body exactly once across save and reopen', async () => {
+    const { api, repo, drafts, service } = setup(); service.dispose();
+    const note = { ...createNote(), title: '旧草稿标题 # *', text: '尚未保存的正文', revision: 1 };
+    const restored = new AutoSaveService(note, repo, drafts, () => 10000, () => {}, () => ({ width: 320, height: 320, pinned: false }));
+    try {
+      expect(restored.note.title).toBeUndefined(); expect(restored.note.text).toBe('# 旧草稿标题 \\# \\*\n\n尚未保存的正文');
+      await restored.persist(); expect(drafts.values.get(note.id)?.note).toMatchObject({ text: restored.note.text, title: undefined });
+      expect(await restored.flush()).toBe(true);
+      const reloaded = await repo.reload(restored.note); expect(reloaded.text).toBe(restored.note.text);
+      expect(api.blocks.get(note.blockId)?.raw.match(/旧草稿标题/g)).toHaveLength(1);
+      await restored.edit('只留下正文', 2); expect(await restored.flush()).toBe(true);
+      expect(api.blocks.get(note.blockId)?.raw).not.toContain('旧草稿标题');
+    } finally { restored.dispose(); }
+  });
+  it('durably records a whole-document copy to a shared container and recovers a lost append response', async () => {
+    const { api, repo, drafts, service } = setup();
+    let restored: AutoSaveService | undefined;
+    try {
+      const originalBlock = service.note.blockId;
+      const raw = 'original';
+      service.note = { ...service.note, docId: originalBlock, storage: 'document', baseline: raw, text: 'original',
+        target: { notebook: api.notebook, path: '/Old/Shared' }, docPath: '/Old/Shared' };
+      api.docs.set('/Old/Shared', service.note.docId!);
+      api.blocks.set(originalBlock, { raw, root_id: service.note.docId! });
+      await service.edit('changed', 1); api.lostAppend = true;
+      expect(await service.flush()).toBe(false);
+      const recovery = drafts.values.get(service.note.id)!;
+      expect(recovery.note.storage).toBe('superblock'); expect(recovery.note.blockId).not.toBe(originalBlock);
+      expect(recovery.note.docPath).toBeUndefined();
+      restored = new AutoSaveService(recovery.note, repo, drafts, () => 10000, () => {}, () => ({ width: 420, height: 320, pinned: false }));
+      expect(await restored.flush()).toBe(true);
+      expect(restored.note.docId).toBe(recovery.note.docId);
+      expect(api.blocks.get(restored.note.blockId)?.raw).toMatch(/^\{\{\{row\nchanged/);
+      expect(api.blocks.get(originalBlock)?.raw).toBe(raw); expect(api.docs.size).toBe(2);
+      expect(api.calls.filter(call => call.path.endsWith('createDocWithMd'))).toHaveLength(1);
+      expect(api.calls.filter(call => call.path.endsWith('appendBlock'))).toHaveLength(1);
+    } finally { service.dispose(); restored?.dispose(); }
+  });
   it('cannot resurrect discarded edits when removing a reloaded draft fails', async () => {
     const { service, drafts, repo, api } = setup();
     let restored: AutoSaveService | undefined;

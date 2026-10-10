@@ -45,6 +45,49 @@ function commit(panel: any, directoryValue: string) {
   directory.value = directoryValue; directory.listeners.get('input')(); panel.options.confirmCallback();
 }
 describe('plugin settings and stored history integration', () => {
+  it.each([false, true])('persists the tray close option before removing the icon (write failure: %s)', async failed => {
+    const { plugin } = setup(), destroy = vi.fn();
+    plugin.settingsValue.trayEnabled = true;
+    plugin.saveData.mockResolvedValue({ code: failed ? -1 : 0, msg: 'settings write failed' });
+    vi.stubGlobal('window', new EventTarget());
+    plugin.remote = {
+      Tray: class { on() {} setToolTip() {} removeAllListeners() {} isDestroyed() { return false; } destroy = destroy; },
+      Menu: { buildFromTemplate: vi.fn() }, require: () => ({ attachTrayLifetime: () => ({ stop() {} }) }), getCurrentWebContents: () => ({}),
+    };
+    plugin.syncTray();
+    const closing = plugin.tray.actions.closeTray();
+    if (failed) await expect(closing).rejects.toThrow('settings write failed'); else await closing;
+    expect(plugin.saveData).toHaveBeenCalledWith('settings.json', expect.objectContaining({ trayEnabled: false, directory: '/Original' }));
+    expect(plugin.settingsValue.trayEnabled).toBe(failed);
+    expect(destroy).toHaveBeenCalledTimes(failed ? 0 : 1);
+    if (failed) plugin.tray.stop();
+  });
+  it.each([false, true])('deletes fallback plugin records while keeping every SiYuan block (native manager: %s)', async nativeManager => {
+    const { plugin, api } = setup(), values = new Map<string, Draft>();
+    const states: Record<string, any> = {};
+    plugin.drafts = { write: async (draft: Draft) => { values.set(draft.note.id, draft); }, remove: async (id: string) => { values.delete(id); },
+      list: async () => [...values.values()], loadWindowState: async () => ({ ...states }), saveWindowState: vi.fn(async () => {}) };
+    plugin.confirmDelete = vi.fn().mockResolvedValue(true); plugin.saveData.mockResolvedValue({ code: 0 });
+    const service = new AutoSaveService(createNote(), plugin.repository, plugin.drafts, () => 10000, () => {}, () => ({ width: 320, height: 320, pinned: false }), saved => plugin.recordFallback(saved));
+    try {
+      await service.edit('正式正文', 1, false, '便签标题'); await service.flush();
+      await service.edit('未保存修改', 2, false, '待删除标题');
+      const note = service.note; states[note.id] = { note };
+      const dialog = { destroy: vi.fn() };
+      plugin.fallbackServices.set(dialog, { service, input: { value: note.text }, titleInput: { value: note.title }, status: {} });
+      if (nativeManager) plugin.manager = { deleteNote: vi.fn(), forgetNote: vi.fn().mockResolvedValue(undefined) };
+      const before = [...api.blocks.entries()], callCount = api.calls.length;
+      expect(await plugin.deleteRecent(note)).toBe(true);
+      expect([...api.blocks.entries()]).toEqual(before); expect(api.calls).toHaveLength(callCount);
+      expect(values.has(note.id)).toBe(false); expect(dialog.destroy).toHaveBeenCalledOnce();
+      if (nativeManager) {
+        expect(plugin.manager.deleteNote).not.toHaveBeenCalled(); expect(plugin.manager.forgetNote).toHaveBeenCalledWith(note.id);
+      } else {
+        expect(plugin.historyValue).toHaveLength(0); expect(plugin.drafts.saveWindowState).toHaveBeenCalledWith({});
+      }
+      expect(plugin.confirmDelete).toHaveBeenCalledOnce();
+    } finally { service.dispose(); }
+  });
   it('starts native shutdown before waiting for a stalled fallback draft write', async () => {
     const { plugin } = setup();
     let release!: (safe: boolean) => void;
@@ -52,7 +95,7 @@ describe('plugin settings and stored history integration', () => {
     const dispose = vi.fn().mockResolvedValue(undefined);
     plugin.manager = { dispose };
     const dialog = { destroy: vi.fn() }, service = { note: { text: 'fallback' }, pause: vi.fn(), closeToDraft, dispose: vi.fn() };
-    plugin.fallbackServices.set(dialog, { service, input: { value: 'fallback' }, status: {} });
+    plugin.fallbackServices.set(dialog, { service, input: { value: 'fallback' }, titleInput: { value: '' }, status: {} });
     const stopping = plugin.onunload();
     expect(dispose).toHaveBeenCalledOnce(); expect(closeToDraft).toHaveBeenCalledOnce();
     release(true); await stopping;

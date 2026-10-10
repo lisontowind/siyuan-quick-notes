@@ -3,7 +3,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createContext, runInContext } from 'node:vm';
 import { createMarkdownNormalizer, type MarkdownEngine } from '../src/services/markdown';
-import { NoteRepository, unwrapMarkdown, wrapMarkdown, ConflictError } from '../src/services/repository';
+import { NoteRepository, unwrapMarkdown, unwrapNoteMarkdown, wrapMarkdown, ConflictError } from '../src/services/repository';
 import { createNote } from '../src/core/identity';
 import { defaults } from '../src/core/settings';
 import { FakeKernel } from './fake-kernel';
@@ -11,6 +11,29 @@ import { FakeKernel } from './fake-kernel';
 // Optional integration with the user's installed parser; never starts SiYuan or writes its workspace.
 const enginePath = process.env.SIYUAN_LUTE_PATH ?? join(process.env.ProgramFiles || 'C:/Program Files', 'SiYuan/resources/stage/protyle/js/lute/lute.min.js');
 describe.skipIf(!existsSync(enginePath))('installed SiYuan Markdown engine (read-only)', () => {
+  it.each(['正文\n\n# 正文自己的标题', ''])('keeps old title text as a normal heading through the installed parser: %s', async text => {
+    const parser = engine() as MarkdownEngine & { BlockDOM2Md(dom: string): string };
+    const api = new FakeKernel(), repo = new NoteRepository(api, () => ({ ...defaults, notebook: api.notebook }), createMarkdownNormalizer(parser));
+    const note = { ...createNote(), title: '中文 # * [链接](url) & $x$ \\ "引号"', text };
+    expect(parser.Md2BlockDOM(wrapMarkdown(note))).toContain('data-type="NodeSuperBlock"');
+    expect(parser.Md2BlockDOM(wrapMarkdown(note))).toContain('data-sb-layout="row"');
+    const original = api.post.bind(api);
+    api.post = async <T>(path: string, body?: any): Promise<T> => {
+      const result = await original<T>(path, body);
+      if (path.endsWith('getBlockKramdown')) {
+        const raw = parser.BlockDOM2Md(parser.Md2BlockDOM(api.blocks.get(note.blockId)!.raw));
+        api.blocks.get(note.blockId)!.raw = raw;
+        return { kramdown: raw } as T;
+      }
+      return result;
+    };
+    await repo.save(note, async () => {});
+    const normalize = createMarkdownNormalizer(parser);
+    expect(note.title).toBeUndefined();
+    expect(normalize(unwrapNoteMarkdown(note.baseline!).text)).toBe(normalize(note.text));
+    const reloaded = await repo.reload(note);
+    expect(reloaded.title).toBeUndefined(); expect(normalize(reloaded.text)).toBe(normalize(note.text));
+  });
   function engine(): MarkdownEngine {
     const context = createContext({ console, TextEncoder, TextDecoder, setTimeout, clearTimeout });
     runInContext('window = globalThis', context);

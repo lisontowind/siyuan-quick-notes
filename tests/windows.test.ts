@@ -99,14 +99,14 @@ function harness(settings: Settings = { ...defaults, debounceMs: 10000 }, initia
   const manager = new QuickNoteWindowManager({ create,
     geometry: () => ({ width: 420, height: 320, pinned: false, open: true }), focus() {} }, repo, drafts, () => settings, history, persistHistory, report, () => {}, () => {}, confirmDelete, externalWindowCount);
   const peer = new BroadcastChannel(manager.channelName), messages: Response[] = [];
-  const snapshots = new Map<string, Pick<NoteRecord, 'text' | 'revision'>>();
+  const snapshots = new Map<string, Pick<NoteRecord, 'text' | 'title' | 'revision'>>();
   let acknowledge = true;
   peer.onmessage = event => {
     const response = event.data as Response; messages.push(response);
     if (response.collect && acknowledge) {
       const snapshot = snapshots.get(response.windowId) ?? manager.windows.get(response.windowId)?.service.note;
       if (snapshot) peer.postMessage({ session: manager.session, windowId: response.windowId, requestId: response.requestId,
-        action: 'collected', text: snapshot.text, revision: snapshot.revision });
+        action: 'collected', text: snapshot.text, title: snapshot.title, revision: snapshot.revision });
     }
   };
   const request = (id: string, action: string, extra = {}) => peer.postMessage({ session: manager.session, windowId: id,
@@ -320,19 +320,20 @@ describe('durable window shutdown and independent input', () => {
       await vi.waitFor(() => expect(h.messages.some(item => item.collect)).toBe(true));
       expect(h.api.blocks.has(note.blockId)).toBe(true); release.resolve(); await saving;
       expect(await deleting).toBe(true);
-      expect(h.api.blocks.has(note.blockId)).toBe(false); expect(h.values.has(note.id)).toBe(false);
+      expect(h.api.blocks.get(note.blockId)?.raw).toContain('second'); expect(h.values.has(note.id)).toBe(false);
       expect(h.manager.history).toHaveLength(0); expect(h.created[0].destroyed).toBe(true);
       expect((await h.drafts.loadWindowState())[note.id]).toBeUndefined();
-      await service.flush(); expect(h.api.blocks.has(note.blockId)).toBe(false);
+      const before = [...h.api.blocks.entries()]; await service.flush(); expect([...h.api.blocks.entries()]).toEqual(before);
+      expect(h.api.calls.some(call => call.path.includes('delete'))).toBe(false);
     } finally { release.resolve(); await h.cleanup(); }
   });
-  it('preserves the window, draft and recent entry when kernel deletion fails', async () => {
+  it('preserves the window, draft and recent entry when local draft removal fails', async () => {
     const h = harness(), note = createNote();
     try {
       await h.manager.open(note); const service = h.manager.windows.get(note.id)!.service;
       await service.edit('saved', 1); await service.flush(); await service.edit('unsaved', 2);
-      h.api.fail = '/api/block/deleteBlock';
-      await expect(h.manager.deleteNote(service.note)).rejects.toThrow('offline');
+      vi.spyOn(h.drafts, 'remove').mockRejectedValueOnce(new Error('local disk failure'));
+      await expect(h.manager.deleteNote(service.note)).rejects.toThrow('local disk failure');
       expect(h.api.blocks.has(note.blockId)).toBe(true); expect(h.values.get(note.id)?.note.text).toBe('unsaved');
       expect(h.manager.history).toHaveLength(1); expect(h.created[0].destroyed).toBe(false);
       await vi.waitFor(() => expect(h.messages.some(item => item.resume)).toBe(true));
@@ -342,7 +343,38 @@ describe('durable window shutdown and independent input', () => {
     const note = { ...createNote(), text: 'draft only', revision: 1 }, h = harness(undefined, [{ note }]);
     try {
       expect(await h.manager.deleteNote(note)).toBe(true);
-      expect(h.values.has(note.id)).toBe(false); expect(h.api.docs.size).toBe(0);
+      expect(h.values.has(note.id)).toBe(false); expect(h.api.docs.size).toBe(0); expect(h.api.calls).toEqual([]);
+    } finally { await h.cleanup(); }
+  });
+  it('removes a closed saved note from plugin metadata while offline and leaves shared document contents unchanged', async () => {
+    const note = { ...createNote(), text: 'keep in SiYuan', docId: '20261010000000-doc0001', revision: 1, savedRevision: 1 };
+    const h = harness(undefined, [{ note }], [note]);
+    try {
+      h.api.docs.set('/Shared', note.docId);
+      h.api.blocks.set(note.blockId, { raw: 'keep in SiYuan', root_id: note.docId });
+      h.api.blocks.set('20261010000000-other01', { raw: 'other content', root_id: note.docId });
+      const before = [...h.api.blocks.entries()];
+      expect(await h.manager.deleteNote(note)).toBe(true);
+      expect([...h.api.blocks.entries()]).toEqual(before); expect(h.api.docs.size).toBe(1); expect(h.api.calls).toEqual([]);
+      expect(h.manager.history).toHaveLength(0); expect(h.values.has(note.id)).toBe(false);
+      expect((await h.drafts.loadWindowState())[note.id]).toBeUndefined();
+    } finally { await h.cleanup(); }
+  });
+  it('folds legacy title-only input into body text and preserves it when making a copy', async () => {
+    const h = harness(), note = createNote();
+    try {
+      await h.manager.open(note); const service = h.manager.windows.get(note.id)!.service;
+      h.request(note.id, 'edit', { text: '', title: '独立标题', revision: 1 });
+      await vi.waitFor(() => expect(service.note.text).toBe('# 独立标题')); await service.flush();
+      expect(h.api.blocks.get(note.blockId)?.raw).toContain('# 独立标题');
+      expect(h.manager.history[0]).toMatchObject({ summary: '# 独立标题' });
+      expect(h.manager.history[0].title).toBeUndefined();
+      await vi.waitFor(() => expect(h.messages.some(response => response.state?.title === '# 独立标题'
+        && response.state.docTitle === service.note.target?.path.split('/').pop())).toBe(true));
+      h.request(note.id, 'copy-note'); await vi.waitFor(() => expect(h.manager.windows.size).toBe(2));
+      const copy = [...h.manager.windows.values()].find(entry => entry !== h.manager.windows.get(note.id))!.service.note;
+      expect(copy.title).toBeUndefined(); expect(copy.text).toBe('# 独立标题'); expect(copy.docId).toBeUndefined();
+      expect(h.values.get(copy.id)?.note.text).toBe('# 独立标题');
     } finally { await h.cleanup(); }
   });
   it('keeps the latest renderer snapshot when shutdown interrupts a stalled save; heartbeat bypasses the save', async () => {

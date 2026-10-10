@@ -5,6 +5,7 @@ export interface TrayActions {
   createNote(): void | Promise<void>;
   recent(): void | Promise<void>;
   settings(): void | Promise<void>;
+  closeTray(): void | Promise<void>;
   windows(): TrayWindowItem[];
   focusWindow(id: string): void | Promise<void>;
   showOwner(): void;
@@ -73,6 +74,7 @@ export class TrayAdapter {
           })) : [{ label: '当前没有速记窗口', enabled: false }] },
           { type: 'separator' },
           { label: '速记设置', click: run(() => { this.actions.showOwner(); return this.actions.settings(); }) },
+          { label: '关闭托盘图标', click: run(() => this.actions.closeTray()) },
         ];
         tray.popUpContextMenu(this.remote.Menu.buildFromTemplate(menu));
       }));

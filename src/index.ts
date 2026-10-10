@@ -3,7 +3,7 @@ import './styles/index.css';
 import { defaults, parseSettings } from './core/settings';
 import { parseHistory } from './core/history';
 import { QuickNoteWindowManager, type HistoryRecord } from './core/windows';
-import { createNote, noteSummary } from './core/identity';
+import { createNote, noteLabel, noteReference, migrateNoteTitle } from './core/identity';
 import { SerialQueue } from './core/serial';
 import { ElectronAdapter } from './platform/desktop';
 import { TrayAdapter } from './platform/tray';
@@ -45,7 +45,7 @@ export default class QuickNotesPlugin extends Plugin {
   private report = (text: string): void => { if (!this.disposed) showMessage(text, 7000, 'error'); console.warn('[Quick Notes]', text); };
   private confirmDelete = (): Promise<boolean> => new Promise(resolve => {
     const main = this.remote?.getCurrentWindow?.(); main?.show(); main?.focus();
-    confirm('删除这条速记？', '将删除这条速记的正文、本机草稿和最近记录。文档中的其他内容和文档本身保留。此操作不可通过插件撤销。', () => resolve(true), () => resolve(false));
+    confirm('从插件删除这条速记？', '将清理插件中的本机草稿、最近记录和窗口记录，并关闭对应便签。已保存到思源的文档及其中的全部内容保留。尚未保存的本机内容将被删除，此操作不可通过插件撤销。', () => resolve(true), () => resolve(false));
   });
   private async writeData(name: string, value: unknown): Promise<void> {
     assertPluginWrite(await this.saveData(name, value));
@@ -56,8 +56,7 @@ export default class QuickNotesPlugin extends Plugin {
   private recordFallback(note: import('./types').NoteRecord): void {
     const prior = this.historyValue.findIndex(item => item.id === note.id);
     if (prior >= 0) this.historyValue.splice(prior, 1);
-    this.historyValue.unshift({ id: note.id, blockId: note.blockId, docId: note.docId, target: note.target,
-      createdAt: note.createdAt, updatedAt: note.updatedAt, summary: noteSummary(note.text) });
+    this.historyValue.unshift({ ...noteReference(note), summary: noteLabel(note) });
     this.historyValue.splice(this.settingsValue.historyLimit);
     void this.persistHistory([...this.historyValue]).catch(error => this.report(`最近列表保存失败：${message(error)}`));
   }
@@ -119,8 +118,16 @@ export default class QuickNotesPlugin extends Plugin {
       this.remote ??= hostRequire('@electron/remote');
       this.tray ??= new TrayAdapter(this.remote, {
         createNote: () => this.newNote(), recent: () => this.showRecent(), settings: () => this.openSettingsPanel(),
+        closeTray: () => this.settingsWrites.run('settings', async () => {
+          if (this.disposed || this.unloading) return;
+          const settings = { ...this.settingsValue, trayEnabled: false };
+          await this.writeData('settings.json', settings);
+          if (this.disposed || this.unloading) return;
+          this.settingsValue = settings; this.syncTray();
+          showMessage('速记托盘图标已关闭，可在速记设置中重新开启');
+        }),
         windows: () => [...(this.manager?.windows.entries() ?? [])].map(([id, entry], index) => ({ id,
-          label: `${index + 1}. ${noteSummary(entry.service.note.text, 40)}`,
+          label: `${index + 1}. ${noteLabel(entry.service.note, 40)}`,
         })),
         focusWindow: async id => { const entry = this.manager?.windows.get(id); if (entry) await this.manager?.open(entry.service.note); },
         showOwner: () => {
@@ -171,11 +178,11 @@ export default class QuickNotesPlugin extends Plugin {
       const search = dialog.element.querySelector('input')!;
       const draftIds = new Set(drafts.map(draft => draft.note.id));
       const entries = [...drafts.map(draft => ({ id: draft.note.id, time: draft.note.updatedAt, path: draft.note.target?.path || '',
-        item: draft.note, label: `本机草稿 · ${noteSummary(draft.note.text, 40)}`, open: async () => {
+        item: draft.note, label: `本机草稿 · ${noteLabel(draft.note, 40)}`, open: async () => {
         if (this.manager) await this.manager.open(draft.note, draft.geometry); else this.fallback(draft.note);
       } })), ...this.historyValue.filter(item => !draftIds.has(item.id)).map(item => ({ id: item.id, time: item.updatedAt,
         item, label: item.summary || item.target?.path.split('/').pop() || '速记', path: item.target?.path || '', open: async () => {
-        if (this.manager) await this.manager.reopen(item); else openWindow({ doc: { id: item.blockId } });
+        if (this.manager) await this.manager.reopen(item); else openWindow({ doc: { id: item.docId! } });
       } }))];
       if (!entries.length) list.textContent = '暂无速记。使用 Ctrl + Alt + N 新建。';
       const appendRow = (item: HistoryRecord, label: string, searchable: string, open: () => Promise<void>) => {
@@ -199,7 +206,7 @@ export default class QuickNotesPlugin extends Plugin {
       if (this.manager?.windows.size) {
         const title = document.createElement('p'); title.textContent = `当前打开 ${this.manager.windows.size} 个窗口（点击下列项目唤醒）`; list.append(title);
         for (const [id, entry] of this.manager.windows) {
-          const label = `${noteSummary(entry.service.note.text, 40)}${entry.service.note.target ? `\n${entry.service.note.target.path}` : ''}`;
+          const label = `${noteLabel(entry.service.note, 40)}${entry.service.note.target ? `\n${entry.service.note.target.path}` : ''}`;
           appendRow(entry.service.note, label, `${label} ${entry.service.note.target?.path || ''}`, async () => { await this.manager?.open(entry.service.note); });
         }
       }
@@ -214,9 +221,9 @@ export default class QuickNotesPlugin extends Plugin {
   }
   private async deleteRecent(item: HistoryRecord): Promise<boolean> {
     if (this.disposed || this.unloading) return false;
-    if (this.manager) return this.manager.deleteNote(item);
-    if (!await this.confirmDelete()) return false;
     const active = [...this.fallbackServices].find(([, entry]) => entry.service.note.id === item.id);
+    if (this.manager && !active) return this.manager.deleteNote(item);
+    if (!await this.confirmDelete()) return false;
     if (active) {
       const [dialog, entry] = active; entry.service.pause(); entry.input.readOnly = true;
       try {
@@ -225,9 +232,10 @@ export default class QuickNotesPlugin extends Plugin {
         await entry.service.delete(); dialog.destroy();
       } finally { entry.input.readOnly = false; entry.service.resume(); }
     } else {
-      const draft = (await this.drafts!.list()).find(value => value.note.id === item.id);
-      await this.repository!.delete(draft?.note ?? item); await this.drafts!.remove(item.id);
+      await this.drafts!.remove(item.id);
     }
+    if (this.manager) { await this.manager.forgetNote(item.id); return true; }
+    const states = await this.drafts!.loadWindowState(); delete states[item.id]; await this.drafts!.saveWindowState(states);
     const index = this.historyValue.findIndex(value => value.id === item.id);
     if (index >= 0) this.historyValue.splice(index, 1);
     await this.persistHistory([...this.historyValue]); return true;
@@ -242,14 +250,16 @@ export default class QuickNotesPlugin extends Plugin {
     if ((this.manager?.windows.size ?? 0) + this.fallbackServices.size >= this.settingsValue.maxWindows) {
       this.report('已达到窗口数量上限，请先关闭一个窗口'); return;
     }
-    const note = existing ? structuredClone(existing) : createNote();
+    const note = existing ? migrateNoteTitle(structuredClone(existing)) : createNote();
     const dialog = this.dialog('降级模式：保存后打开思源官方窗口', '<div class="qn-fallback"><p>当前无法创建轻量原生窗口。输入内容并保存后，打开思源官方文档窗口（至少 493 × 376）。</p><textarea class="b3-text-field" placeholder="Markdown 速记"></textarea><button class="b3-button">保存并打开官方窗口</button> <button class="b3-button b3-button--outline" data-keep-draft>保留草稿并关闭</button><p role="status"></p></div>', true);
     const input = dialog.element.querySelector('textarea')!; input.value = note.text;
     const button = dialog.element.querySelector('button.b3-button') as HTMLButtonElement;
     const status = dialog.element.querySelector('[role=status]')!;
     const keepDraft = dialog.element.querySelector('[data-keep-draft]') as HTMLButtonElement;
     const service = new AutoSaveService(note, this.repository!, this.drafts!, () => this.settingsValue.debounceMs,
-      () => { if (service.error) status.textContent = service.error; },
+      () => {
+        status.textContent = service.error || (service.phase === 'saved' ? '已保存到思源' : '');
+      },
       () => ({ width: this.settingsValue.width, height: this.settingsValue.height, pinned: this.settingsValue.alwaysOnTop }),
       saved => this.recordFallback(saved));
     this.fallbackServices.set(dialog, { service, input, status });
@@ -270,7 +280,7 @@ export default class QuickNotesPlugin extends Plugin {
         if (this.unloading || this.disposed) return;
         const note = service.note;
         await this.historyWrites.run('history', async () => {});
-        openWindow({ doc: { id: note.blockId }, alwaysOnTop: this.settingsValue.alwaysOnTop }); dialog.destroy();
+        openWindow({ doc: { id: note.docId! }, alwaysOnTop: this.settingsValue.alwaysOnTop }); dialog.destroy();
       }).catch(error => { status.textContent = `保存失败：${message(error)}`; button.disabled = false; keepDraft.disabled = false; input.disabled = false; });
     };
   }
