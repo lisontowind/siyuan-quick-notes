@@ -1,5 +1,5 @@
 import { build } from 'vite';
-import { readdir, readFile, writeFile, copyFile, mkdir } from 'node:fs/promises';
+import { readdir, readFile, writeFile, copyFile, cp } from 'node:fs/promises';
 import { resolve, relative } from 'node:path';
 import { zipSync } from 'fflate';
 import { createTrayIcon } from './create-tray-icon.mjs';
@@ -19,8 +19,7 @@ for (const name of ['plugin.json', 'README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.
   await copyFile(name, `dist/${name}`);
 }
 for (const dir of ['i18n', 'docs']) {
-  await mkdir(`dist/${dir}`, { recursive: true });
-  for (const name of await readdir(dir)) await copyFile(`${dir}/${name}`, `dist/${dir}/${name}`);
+  await cp(dir, `dist/${dir}`, { recursive: true });
 }
 const files = {};
 async function collect(dir) {

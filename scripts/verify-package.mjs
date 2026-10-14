@@ -21,6 +21,14 @@ for (const file of ['index.js', 'index.css', 'window.js', 'window.css', 'window.
   assert(files[file]?.length, `Missing ${file}`);
   assert.deepEqual(Buffer.from(files[file]), await readFile(`dist/${file}`), `Archive differs from dist: ${file}`);
 }
+// README images must remain available when the plugin is installed from the ZIP.
+const readme = strFromU8(files['README.md']);
+for (const match of readme.matchAll(/!\[[^\]]*\]\(([^)]+)\)/g)) {
+  const name = match[1];
+  if (/^https?:\/\//.test(name)) continue;
+  assert(files[name]?.length, `Missing README image: ${name}`);
+  assert.deepEqual(Buffer.from(files[name]), await readFile(name), `README image differs from source: ${name}`);
+}
 const icon = Buffer.from(files['tray.ico']);
 assert.equal(icon.readUInt16LE(2), 1); assert.equal(icon.readUInt16LE(4), 3);
 for (let i = 0; i < 3; i++) {

@@ -12,6 +12,14 @@
 
 2026-10-13 修正集市图标圆角：旧图虽然带有 alpha 通道，但圆角外仍有绿色背景，部分角落完全不透明。使用内置 ImageGen 清除圆角外背景，保留绿色圆角底板与便签图案，再以保留 alpha 的方式缩小为 160×160。检查四角 alpha 均为 0、中心 alpha 为 253，以及浅色和深色背景上的边缘显示。托盘图标继续使用原有素材。
 
+## 功能说明配图
+
+README 使用 `docs/images/01-window.png`、`02-images.png`、`03-storage.png`、`04-recovery.png`，分别说明便签操作、图片插入、保存位置和最近记录与草稿恢复。
+
+便签与图片预览使用构建后的 `window.html`、`window.js`、`window.css` 离线渲染，通过演示频道提供样例正文与保存状态，不连接思源工作空间。示例图片为现有插件图标。设置和最近记录为明确标注的关键项示意。图片尺寸为 1680×915，中文文字与实际界面一起渲染。
+
+先运行 `npm run build`，再运行 `node scripts/render-docs.mjs` 生成配图。渲染需要可解析的 Playwright 包和已安装的 Chromium 浏览器；可用 `DOCS_PLAYWRIGHT` 指定包路径，`DOCS_CHROMIUM` 指定浏览器可执行文件路径。这些依赖仅供文档制图，不加入插件运行依赖。生成后重新运行 `npm run build`，将配图打入安装包；包校验会检查 README 引用的本地图片是否存在且与源文件一致。
+
 ## 透明背景修正提示词
 
 ```text
