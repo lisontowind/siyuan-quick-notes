@@ -14,6 +14,8 @@ import { createMarkdownNormalizer } from './services/markdown';
 import { AutoSaveService, message } from './services/autosave';
 import { createSettings } from './components/settings';
 import { assertPluginWrite } from './services/plugin-data';
+import { ImageUploadService } from './services/images';
+import { bindImageInputs, readImages } from './window/images';
 import type { Settings } from './types';
 
 const hostRequire = (name: string): any => (window as unknown as { require(name: string): unknown }).require(name);
@@ -251,19 +253,45 @@ export default class QuickNotesPlugin extends Plugin {
       this.report('已达到窗口数量上限，请先关闭一个窗口'); return;
     }
     const note = existing ? migrateNoteTitle(structuredClone(existing)) : createNote();
-    const dialog = this.dialog('降级模式：保存后打开思源官方窗口', '<div class="qn-fallback"><p>当前无法创建轻量原生窗口。输入内容并保存后，打开思源官方文档窗口（至少 493 × 376）。</p><textarea class="b3-text-field" placeholder="Markdown 速记"></textarea><button class="b3-button">保存并打开官方窗口</button> <button class="b3-button b3-button--outline" data-keep-draft>保留草稿并关闭</button><p role="status"></p></div>', true);
+    const dialog = this.dialog('降级模式：保存后打开思源官方窗口', '<div class="qn-fallback"><p>当前无法创建轻量原生窗口。输入内容并保存后，打开思源官方文档窗口（至少 493 × 376）。</p><textarea class="b3-text-field" placeholder="Markdown 速记"></textarea><button class="b3-button">保存并打开官方窗口</button> <button class="b3-button b3-button--outline" data-keep-draft>保留草稿并关闭</button> <button class="b3-button b3-button--outline" data-insert-image>插入图片…</button><input type="file" multiple hidden data-image-picker><p role="status"></p></div>', true);
     const input = dialog.element.querySelector('textarea')!; input.value = note.text;
     const button = dialog.element.querySelector('button.b3-button') as HTMLButtonElement;
     const status = dialog.element.querySelector('[role=status]')!;
     const keepDraft = dialog.element.querySelector('[data-keep-draft]') as HTMLButtonElement;
+    const insertImage = dialog.element.querySelector('[data-insert-image]') as HTMLButtonElement;
+    let imageBusy = false;
+    let composing = false;
+    input.addEventListener('compositionstart', () => { composing = true; });
+    input.addEventListener('compositionend', () => { composing = false; });
     const service = new AutoSaveService(note, this.repository!, this.drafts!, () => this.settingsValue.debounceMs,
       () => {
+        if (imageBusy) return;
         status.textContent = service.error || (service.phase === 'saved' ? '已保存到思源' : '');
       },
       () => ({ width: this.settingsValue.width, height: this.settingsValue.height, pinned: this.settingsValue.alwaysOnTop }),
       saved => this.recordFallback(saved));
     this.fallbackServices.set(dialog, { service, input, status });
+    bindImageInputs(input, dialog.element.querySelector('[data-image-picker]') as HTMLInputElement, insertImage, files => {
+      if (imageBusy || input.disabled || this.unloading || this.disposed || composing) return;
+      const original = input.value, from = input.selectionStart, to = input.selectionEnd;
+      imageBusy = true; input.readOnly = true; insertImage.disabled = true;
+      status.textContent = '正在上传图片…';
+      void readImages(files).then(images => new ImageUploadService().upload(images)).then(async markdown => {
+        if (this.unloading || this.disposed || !this.fallbackServices.has(dialog)) return;
+        if (input.value !== original) throw new Error('正文已变化，请重新插入图片');
+        const insert = `${from && original[from - 1] !== '\n' ? '\n\n' : ''}${markdown}\n\n`;
+        if (original.length - (to - from) + insert.length > 2_000_000) throw new Error('插入图片后超过 200 万字符');
+        input.value = original.slice(0, from) + insert + original.slice(to);
+        input.setSelectionRange(from + insert.length, from + insert.length);
+        imageBusy = false;
+        await service.edit(input.value, service.note.revision + 1, false);
+        input.focus();
+      }).catch(error => { if (!this.unloading && !this.disposed) status.textContent = `图片未插入：${message(error)}`; }).finally(() => {
+        imageBusy = false; input.readOnly = this.unloading || this.disposed; insertImage.disabled = this.unloading || this.disposed;
+      });
+    });
     keepDraft.onclick = () => {
+      if (imageBusy) { status.textContent = '图片正在上传，请等待完成后再关闭'; return; }
       input.disabled = true; keepDraft.disabled = true; button.disabled = true;
       void service.closeToDraft().then(safe => { if (!safe) throw new Error(service.error || '最新草稿未确认落盘'); dialog.destroy(); }).catch(error => {
         status.textContent = `草稿未落盘，不能关闭：${message(error)}`; input.disabled = false; keepDraft.disabled = false; button.disabled = false;
@@ -273,6 +301,7 @@ export default class QuickNotesPlugin extends Plugin {
       void service.edit(input.value, service.note.revision + 1, false).catch(error => { status.textContent = `草稿失败：${message(error)}`; });
     };
     button.onclick = () => {
+      if (imageBusy) { status.textContent = '图片正在上传，请等待完成后再保存并打开'; return; }
       if (!service.note.text.trim()) return;
       button.disabled = true; keepDraft.disabled = true; input.disabled = true;
       void service.flush().then(async safe => {

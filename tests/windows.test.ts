@@ -96,8 +96,9 @@ function harness(settings: Settings = { ...defaults, debounceMs: 10000 }, initia
   const api = new FakeKernel(), repo = new NoteRepository(api, () => settings), created: FakeWindow[] = [];
   const persistHistory = vi.fn().mockResolvedValue(undefined), report = vi.fn(), confirmDelete = vi.fn().mockResolvedValue(true);
   const create = vi.fn(async (_url: string, _geometry: import('../src/types').Geometry) => { const win = new FakeWindow(); created.push(win); return win; });
+  const upload = vi.fn(async (_images: import('../src/types').ImageInput[]) => '![截图](assets/test.png)');
   const manager = new QuickNoteWindowManager({ create,
-    geometry: () => ({ width: 420, height: 320, pinned: false, open: true }), focus() {} }, repo, drafts, () => settings, history, persistHistory, report, () => {}, () => {}, confirmDelete, externalWindowCount);
+    geometry: () => ({ width: 420, height: 320, pinned: false, open: true }), focus() {} }, repo, drafts, () => settings, history, persistHistory, report, () => {}, () => {}, confirmDelete, externalWindowCount, { upload });
   const peer = new BroadcastChannel(manager.channelName), messages: Response[] = [];
   const snapshots = new Map<string, Pick<NoteRecord, 'text' | 'title' | 'revision'>>();
   let acknowledge = true;
@@ -111,12 +112,45 @@ function harness(settings: Settings = { ...defaults, debounceMs: 10000 }, initia
   };
   const request = (id: string, action: string, extra = {}) => peer.postMessage({ session: manager.session, windowId: id,
     requestId: crypto.randomUUID(), action, ...extra });
-  return { manager, repo, api, drafts, values, writes, created, create, persistHistory, messages, snapshots, request, report, confirmDelete,
+  return { manager, repo, api, drafts, values, writes, created, create, persistHistory, messages, snapshots, request, report, confirmDelete, upload,
     ignoreCollections: () => { acknowledge = false; },
     cleanup: async () => { await manager.dispose(); peer.close(); created.forEach(win => win.destroy()); vi.unstubAllGlobals(); } };
 }
 
 describe('durable window shutdown and independent input', () => {
+  it('uploads for the requesting window without delaying heartbeats or other window input', async () => {
+    const h = harness(), note = createNote(), other = createNote(), release = deferred();
+    const images = [{ name: '截图.png', data: new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]).buffer }];
+    try {
+      await h.manager.open(note); await h.manager.open(other);
+      h.upload.mockImplementationOnce(async () => { await release.promise; return '![截图](assets/test.png)'; });
+      h.request(note.id, 'upload-images', { images });
+      await vi.waitFor(() => expect(h.upload).toHaveBeenCalledOnce());
+      h.request(note.id, 'heartbeat'); h.request(other.id, 'edit', { text: 'other typing', revision: 1 });
+      await vi.waitFor(() => {
+        expect(h.messages.some(item => item.windowId === note.id && item.heartbeat)).toBe(true);
+        expect(h.manager.windows.get(other.id)!.service.note.text).toBe('other typing');
+      });
+      h.request(note.id, 'upload-images', { images });
+      await vi.waitFor(() => expect(h.messages.some(item => item.imageUpload?.error?.includes('忙碌'))).toBe(true));
+      expect(h.upload).toHaveBeenCalledOnce();
+      release.resolve();
+      await vi.waitFor(() => expect(h.messages.some(item => item.windowId === note.id && item.imageUpload?.markdown === '![截图](assets/test.png)')).toBe(true));
+      expect(h.manager.windows.get(note.id)!.service.note.text).toBe('');
+      expect(h.messages.some(item => item.windowId === other.id && item.imageUpload)).toBe(false);
+    } finally { release.resolve(); await h.cleanup(); }
+  });
+  it('returns upload failures without corrupting the note save state', async () => {
+    const h = harness(), note = createNote();
+    try {
+      await h.manager.open(note); const service = h.manager.windows.get(note.id)!.service;
+      await service.edit('preserved text', 1, false);
+      h.upload.mockRejectedValueOnce(new Error('upload failed'));
+      h.request(note.id, 'upload-images', { images: [{ name: 'x.png', data: new ArrayBuffer(8) }] });
+      await vi.waitFor(() => expect(h.messages.some(item => item.imageUpload?.error === 'upload failed')).toBe(true));
+      expect(service.note.text).toBe('preserved text'); expect(service.phase).toBe('dirty');
+    } finally { await h.cleanup(); }
+  });
   it('finishes shutdown within its deadline when native creation has not resolved', async () => {
     const h = harness(), note = createNote(), release = deferred(), realTimeout = globalThis.setTimeout;
     let opening: Promise<void> | undefined;

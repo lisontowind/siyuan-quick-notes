@@ -20,3 +20,9 @@ button:disabled { opacity:.35; cursor:default; }
 #actions button { display:block; width:100%; text-align:left; font-size:12px; padding:8px; }
 [hidden] { display:none !important; }
 #actions .danger { color:#e76b6b; }
+.qn-image-preview { margin:6px 0 12px; padding:8px; max-width:100%; border:1px solid var(--line); border-radius:6px; background:var(--paper); overflow:hidden; }
+.qn-image-preview img { display:block; max-width:100%; max-height:240px; width:auto; height:auto; margin:0 auto; object-fit:contain; }
+.qn-image-preview figcaption { display:flex; align-items:center; gap:8px; margin-top:6px; font:11px/1.5 "Segoe UI", "Microsoft YaHei", sans-serif; color:var(--muted); }
+.qn-image-preview figcaption span { flex:1; min-width:0; overflow-wrap:anywhere; }
+.qn-image-preview button { flex:none; padding:3px 5px; font-size:11px; color:var(--accent); }
+.qn-image-preview[data-failed=true] figcaption { color:#c66045; margin-top:0; }

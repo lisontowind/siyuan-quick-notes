@@ -23,15 +23,18 @@ export interface WindowState {
   phase: SavePhase; error?: string; localRevision: number; pinned: boolean; dark: boolean; showSaved: boolean;
 }
 export interface NoteContent { text: string; revision: number }
+export interface ImageInput { name: string; data: ArrayBuffer }
 export interface Request {
   session: string; windowId: string; requestId: string;
-  action: 'ready' | 'heartbeat' | 'collected' | 'edit' | 'save' | 'close' | 'close-draft' | 'pin' | 'minimize' | 'new' | 'open' | 'recent' | 'reload' | 'copy-note' | 'delete';
+  action: 'ready' | 'heartbeat' | 'collected' | 'edit' | 'save' | 'close' | 'close-draft' | 'pin' | 'minimize' | 'new' | 'open' | 'recent' | 'reload' | 'copy-note' | 'delete' | 'upload-images';
   text?: string; title?: string; revision?: number; error?: string;
+  images?: ImageInput[];
 }
 export interface Response {
   session: string; windowId: string; requestId?: string; state?: WindowState; content?: NoteContent;
   heartbeat?: { revision: number; localRevision: number }; durable?: { revision: number };
   focus?: boolean; flush?: boolean; collect?: boolean; resume?: boolean; stopped?: string;
+  imageUpload?: { markdown?: string; error?: string };
 }
 export interface KernelTransport { post<T>(path: string, body?: unknown): Promise<T> }
 export interface DraftStore {

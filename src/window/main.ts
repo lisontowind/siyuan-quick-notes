@@ -1,6 +1,7 @@
 import './window.css';
 import { QuickNoteEditor } from './editor';
 import { presentStatus } from './status';
+import { bindImageInputs, readImages } from './images';
 import type { Request, Response, WindowState, NoteContent } from '../types';
 
 const params = new URLSearchParams(location.search);
@@ -20,6 +21,13 @@ let disconnected = false, closeConfirmed = false, resendEdit = false;
 let closeConfirmTimer: ReturnType<typeof setTimeout> | undefined;
 let collectionId: string | undefined;
 let reloadConfirmTimer: ReturnType<typeof setTimeout> | undefined;
+let imageBusy = false;
+let imageRequest: { id: string; resolve: (markdown: string) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> } | undefined;
+function cancelImageRequest(reason: string): void {
+  if (!imageRequest) return;
+  const pending = imageRequest; imageRequest = undefined; clearTimeout(pending.timer);
+  pending.reject(new Error(reason));
+}
 const menu = $('actions'), more = $('more');
 function closeMenu(): void {
   menu.hidden = true; more.setAttribute('aria-expanded', 'false');
@@ -41,8 +49,37 @@ function compositionEnded(): void {
 }
 const editor = new QuickNoteEditor($('editor'), changed, compositionEnded, () => action('save'));
 function setEditable(enabled: boolean): void {
-  editor.setEditable(enabled);
+  editor.setEditable(enabled && !imageBusy);
+  $('insert-image').toggleAttribute('disabled', !enabled || imageBusy);
 }
+
+async function insertImages(files: File[], point?: { x: number; y: number }): Promise<void> {
+  closeMenu();
+  if (!connected || disconnected || frozen || stopped || imageBusy || composing()) {
+    showError('当前无法插入图片，请等待连接、输入或上传完成'); return;
+  }
+  const insert = editor.prepareImageInsertion(point);
+  sendEdit();
+  imageBusy = true; setEditable(false);
+  status.hidden = false; status.dataset.phase = 'saving'; status.textContent = '正在上传图片…';
+  try {
+    const images = await readImages(files);
+    if (stopped || disconnected || frozen) throw new Error('连接或窗口状态已变化，请重新插入图片');
+    const markdown = await new Promise<string>((resolve, reject) => {
+      const id = crypto.randomUUID();
+      const timer = setTimeout(() => { imageRequest = undefined; reject(new Error('图片上传未收到确认，请重新插入图片')); }, 35000);
+      imageRequest = { id, resolve, reject, timer };
+      request('upload-images', { requestId: id, images });
+    });
+    if (stopped || disconnected || frozen) throw new Error('连接或窗口状态已变化，请重新插入图片');
+    imageBusy = false; setEditable(true); insert(markdown); sendEdit();
+  } catch (error) {
+    if (!stopped && !disconnected) showError(`图片未插入：${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    imageBusy = false; if (!stopped) setEditable(connected && !disconnected && !frozen);
+  }
+}
+bindImageInputs($('editor'), $('image-picker') as HTMLInputElement, $('insert-image'), (files, point) => { void insertImages(files, point); });
 
 function request(action: Request['action'], extra: Partial<Request> = {}): void {
   if (stopped) return;
@@ -83,6 +120,7 @@ function action(kind: Request['action']): void {
 }
 function collect(requestId: string): void {
   closeMenu();
+  if (imageBusy) { request('collected', { requestId, error: '图片正在上传，已保留窗口，请等待完成后再关闭或重新载入' }); return; }
   collectionId = requestId; pendingAction = undefined; clearTimeout(editTimer);
   if (!connected) { request('collected', { requestId, error: '窗口尚未完成初始化，内容未确认' }); return; }
   // Let the IME finish before freezing; shutdown waits for this explicit snapshot, not a sleep.
@@ -107,7 +145,7 @@ function render(state: WindowState, content?: NoteContent): void {
   titleDisplay.textContent = state.docTitle || '新速记';
   titleDisplay.title = `${titleDisplay.textContent} · 拖动移动窗口`;
   document.title = `${titleDisplay.textContent} · 悬浮速记`;
-  const presentation = presentStatus(state, revision, editor.getText() !== lastSent);
+  const presentation = imageBusy ? { text: '正在上传图片…', phase: 'saving', hidden: false } : presentStatus(state, revision, editor.getText() !== lastSent);
   status.dataset.phase = presentation.phase; status.textContent = presentation.text; status.hidden = presentation.hidden;
   status.title = presentation.text;
   $('close-draft').title = state.localRevision >= revision ? '本机草稿已落盘，可关闭后恢复' : '先确保本机草稿落盘再关闭';
@@ -117,6 +155,12 @@ channel.onmessage = event => {
   const response = event.data as Response;
   if (stopped || !response || response.session !== session || response.windowId !== windowId) return;
   lastHeard = Date.now();
+  if (response.imageUpload && imageRequest && imageRequest.id === response.requestId) {
+    const pending = imageRequest; imageRequest = undefined; clearTimeout(pending.timer);
+    if (response.imageUpload.error) pending.reject(new Error(response.imageUpload.error));
+    else if (response.imageUpload.markdown) pending.resolve(response.imageUpload.markdown);
+    else pending.reject(new Error('图片上传结果为空'));
+  }
   const recovered = disconnected;
   if (recovered) {
     disconnected = false; resetCloseConfirmation();
@@ -131,6 +175,7 @@ channel.onmessage = event => {
   if (response.stopped) {
     closeMenu();
     stopped = true; frozen = true; collectionId = undefined; setEditable(false);
+    cancelImageRequest('插件已停用，请重新插入图片');
     clearInterval(readyTimer); clearTimeout(editTimer); showError(response.stopped);
     for (const id of pluginActions) $(id).setAttribute('disabled', '');
     channel.close();
@@ -162,11 +207,12 @@ $('reload').addEventListener('click', () => {
   closeMenu(); action('reload');
 });
 window.addEventListener('blur', () => { closeMenu(); action('save'); });
-window.addEventListener('beforeunload', () => { clearInterval(readyTimer); clearTimeout(editTimer); clearTimeout(reloadConfirmTimer); clearTimeout(closeConfirmTimer); channel.close(); editor.destroy(); });
+window.addEventListener('beforeunload', () => { stopped = true; clearInterval(readyTimer); clearTimeout(editTimer); clearTimeout(reloadConfirmTimer); clearTimeout(closeConfirmTimer); clearTimeout(imageRequest?.timer); imageRequest = undefined; channel.close(); editor.destroy(); });
 const readyTimer = setInterval(() => {
   request(connected ? 'heartbeat' : 'ready');
   if (!disconnected && Date.now() - lastHeard > 6000) {
     disconnected = true; pendingAction = undefined; clearTimeout(editTimer); closeMenu();
+    cancelImageRequest('与插件失去连接，请重新插入图片');
     setEditable(false);
     for (const id of pluginActions) $(id).setAttribute('disabled', '');
     showError('与插件失去连接，当前输入可能尚未保存。请复制文本后点击关闭。');

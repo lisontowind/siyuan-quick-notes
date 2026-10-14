@@ -2,7 +2,7 @@
   "name": "siyuan-quick-notes",
   "author": "Lisontowind",
   "url": "https://github.com/lisontowind/siyuan-quick-notes",
-  "version": "0.1.20",
+  "version": "0.1.22",
   "minAppVersion": "3.8.6",
   "backends": [
     "windows"

@@ -6,6 +6,7 @@ import { AutoSaveService, message } from '../services/autosave';
 import { createNote, noteReference, noteLabel } from './identity';
 import { SerialQueue, TriggerGate } from './serial';
 import { validRequest } from './protocol';
+import { ImageUploadService } from '../services/images';
 
 export type HistoryRecord = NoteReference & { summary?: string };
 export interface WindowEntry { native?: NativeWindow; service: AutoSaveService; geometry: Geometry; lastFocus: number; closing: boolean }
@@ -28,19 +29,21 @@ export class QuickNoteWindowManager {
   private disposal?: Promise<void>;
   private deleting = new Set<string>();
   private deletionWork = new Set<Promise<void>>();
+  private uploading = new Set<string>();
   constructor(private adapter: DesktopAdapter, private repo: NoteRepository, private drafts: LocalDraftStore,
     private settings: () => Settings, readonly history: HistoryRecord[],
     private persistHistory: (history: HistoryRecord[]) => Promise<void>, private report: (text: string) => void,
     private openDoc: (id: string) => void, private showRecent: () => void,
     private confirmDelete: () => Promise<boolean> = async () => false,
-    private externalWindowCount: () => number = () => 0) {
+    private externalWindowCount: () => number = () => 0,
+    private images = new ImageUploadService()) {
     this.channelName = `siyuan-quick-notes:${this.session}`;
     this.channel = new BroadcastChannel(this.channelName);
     this.channel.onmessage = event => {
       if (!this.active || !validRequest(event.data, this.session) || !this.windows.has(event.data.windowId)) return;
       const req: Request = event.data;
       // Input, heartbeat, and durable close acknowledgements must not wait for kernel I/O.
-      const immediate = ['edit', 'ready', 'heartbeat', 'collected', 'close', 'close-draft'].includes(req.action);
+      const immediate = ['edit', 'ready', 'heartbeat', 'collected', 'close', 'close-draft', 'upload-images'].includes(req.action);
       if (this.tearingDown && !['edit', 'heartbeat', 'collected', 'ready'].includes(req.action)) return;
       const work = immediate ? this.handle(req) : this.incoming.run(req.windowId, () => this.handle(req));
       void work.catch(error => {
@@ -155,6 +158,21 @@ export class QuickNoteWindowManager {
     if (this.tearingDown && !['edit', 'ready', 'heartbeat', 'collected'].includes(req.action)) return;
     const service = entry.service;
     switch (req.action) {
+      case 'upload-images': {
+        if (entry.closing || this.uploading.has(req.windowId)) {
+          this.send({ windowId: req.windowId, requestId: req.requestId, imageUpload: { error: '窗口忙碌，请稍后重试' } }); return;
+        }
+        this.uploading.add(req.windowId);
+        try {
+          const markdown = await this.images.upload(req.images!);
+          if (!entry.closing && this.windows.get(req.windowId) === entry && !this.tearingDown) {
+            this.send({ windowId: req.windowId, requestId: req.requestId, imageUpload: { markdown } });
+          } else this.send({ windowId: req.windowId, requestId: req.requestId, imageUpload: { error: '窗口正在关闭，请稍后重新插入图片' } });
+        } catch (error) {
+          this.send({ windowId: req.windowId, requestId: req.requestId, imageUpload: { error: message(error) } });
+        } finally { this.uploading.delete(req.windowId); }
+        return;
+      }
       case 'ready': this.publish(req.windowId, req.requestId, true); return;
       case 'heartbeat': this.send({ windowId: req.windowId, requestId: req.requestId,
         heartbeat: { revision: service.note.revision, localRevision: service.localRevision } }); return;

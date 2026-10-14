@@ -5,6 +5,7 @@ vi.mock('../src/window/editor', () => ({ QuickNoteEditor: class {
   constructor(_: unknown, changed: () => void, ended: () => void) { editor.changed = changed; editor.compositionEnded = ended; }
   get composing() { return editor.composing; }
   getText() { return editor.text; } setText(value: string) { editor.text = value; }
+  prepareImageInsertion() { return (markdown: string) => { editor.text += `\n${markdown}`; editor.changed(); }; }
   setEditable(value: boolean) { editor.enabled = value; } focus() {} destroy() {}
 } }));
 class Element {
@@ -41,6 +42,39 @@ beforeEach(async () => {
 });
 afterEach(() => { windowListeners.get('beforeunload')?.(); vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 describe('renderer close protocol', () => {
+  const pasteImage = async () => {
+    const file = new File([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])], 'screenshot.png');
+    const preventDefault = vi.fn();
+    elements.get('editor')!.listeners.get('paste')!({ clipboardData: { files: [file] }, preventDefault, stopPropagation: vi.fn() });
+    await vi.waitFor(() => expect(Channel.latest.sent.some(item => item.action === 'upload-images')).toBe(true));
+    expect(preventDefault).toHaveBeenCalledOnce();
+    return Channel.latest.sent.filter(item => item.action === 'upload-images').at(-1)!;
+  };
+  it('inserts only a matching confirmed image response and submits it as a normal revision', async () => {
+    initialize(); editor.text = 'unsent text';
+    const request = await pasteImage(); expect(editor.enabled).toBe(false);
+    expect(Channel.latest.sent.some(item => item.action === 'edit' && item.text === 'unsent text')).toBe(true);
+    response({ requestId: 'other', imageUpload: { markdown: 'wrong' } });
+    expect(editor.text).toBe('unsent text');
+    response({ requestId: request.requestId, imageUpload: { markdown: '![截图](assets/screenshot.png)' } });
+    await vi.waitFor(() => expect(editor.enabled).toBe(true));
+    expect(Channel.latest.sent.at(-1)).toMatchObject({ action: 'edit', text: 'unsent text\n![截图](assets/screenshot.png)' });
+  });
+  it('refuses close collection during upload and resumes editing after failure', async () => {
+    initialize(); const request = await pasteImage();
+    response({ collect: true, requestId: 'close-pending' });
+    expect(Channel.latest.sent.at(-1)).toMatchObject({ action: 'collected', error: expect.stringContaining('图片正在上传') });
+    response({ resume: true }); expect(editor.enabled).toBe(false);
+    response({ requestId: request.requestId, imageUpload: { error: 'disk full' } });
+    await vi.waitFor(() => expect(editor.enabled).toBe(true));
+    expect(editor.text).toBe('saved'); expect(elements.get('status')!.textContent).toContain('disk full');
+  });
+  it('does not insert a late upload into a stopped window', async () => {
+    initialize(); const request = await pasteImage();
+    response({ stopped: '插件已停用' });
+    response({ requestId: request.requestId, imageUpload: { markdown: 'late image' } });
+    expect(editor.text).toBe('saved'); expect(editor.enabled).toBe(false);
+  });
   it('shows the document title in the draggable header and edits only the body', () => {
     response({ state: { ...state, docTitle: '编号文档' }, content: { text: '# 旧标题\n\n正文', revision: 1 } });
     expect(elements.get('title-display')!.textContent).toBe('编号文档');
