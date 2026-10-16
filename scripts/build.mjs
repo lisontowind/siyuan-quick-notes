@@ -1,6 +1,6 @@
 import { build } from 'vite';
 import { readdir, readFile, writeFile, copyFile, cp } from 'node:fs/promises';
-import { resolve, relative } from 'node:path';
+import { resolve, relative, toNamespacedPath } from 'node:path';
 import { zipSync } from 'fflate';
 import { createTrayIcon } from './create-tray-icon.mjs';
 
@@ -18,9 +18,12 @@ await build({ configFile: false, publicDir: false, build: {
 for (const name of ['plugin.json', 'README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'window.html', 'icon.png', 'preview.png']) {
   await copyFile(name, `dist/${name}`);
 }
-for (const dir of ['i18n', 'docs']) {
-  await cp(dir, `dist/${dir}`, { recursive: true });
-}
+await cp('i18n', 'dist/i18n', { recursive: true });
+await cp('docs', 'dist/docs', {
+  recursive: true,
+  // fs.cp may supply Windows paths with the extended-length namespace prefix.
+  filter: source => toNamespacedPath(source) !== toNamespacedPath(resolve('docs/images')),
+});
 const files = {};
 async function collect(dir) {
   for (const item of await readdir(dir, { withFileTypes: true })) {

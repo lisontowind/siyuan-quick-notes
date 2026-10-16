@@ -21,7 +21,7 @@
 2. 打开思源，在 **设置 → 集市 → 已下载 → 插件** 中启用“悬浮速记”。
 3. 点击顶栏的 **悬浮速记 → 速记设置**，确认保存位置。
 
-![保存位置图解：选择目标笔记本，填写目录模板，预览解析后的文档路径](docs/images/03-storage.png)
+![保存位置图解：选择目标笔记本，填写目录模板，预览解析后的文档路径](https://raw.githubusercontent.com/lisontowind/siyuan-quick-notes/f553b7a52036ab8de1ea992c454cd6ad2a58550c/docs/images/03-storage.png)
 
 *设置图为关键项示意。图中展示按天汇集的模板，首次安装默认使用下面的时间戳模板。*
 
@@ -35,7 +35,7 @@
 
 ## 记下一个想法
 
-![便签操作图解：顶部新建、回到思源、置顶和更多；正文使用 Markdown；底部显示保存状态](docs/images/01-window.png)
+![便签操作图解：顶部新建、回到思源、置顶和更多；正文使用 Markdown；底部显示保存状态](https://raw.githubusercontent.com/lisontowind/siyuan-quick-notes/f553b7a52036ab8de1ea992c454cd6ad2a58550c/docs/images/01-window.png)
 
 *便签图由当前版本界面代码渲染，正文为演示数据。顶部按钮从左到右依次为：新建、在思源打开、置顶、更多、最小化、关闭。*
 
@@ -49,7 +49,7 @@
 
 ### 插入截图和图片
 
-![图片插入图解：粘贴截图、选择文件或拖入图片，保留 Markdown 链接并在下方直接预览](docs/images/02-images.png)
+![图片插入图解：粘贴截图、选择文件或拖入图片，保留 Markdown 链接并在下方直接预览](https://raw.githubusercontent.com/lisontowind/siyuan-quick-notes/f553b7a52036ab8de1ea992c454cd6ad2a58550c/docs/images/02-images.png)
 
 *便签中的图片预览由当前版本代码渲染，使用插件图标作为示例图片。其他 Markdown 内容仍显示源码。*
 
@@ -76,7 +76,7 @@
 
 ## 找回最近速记与草稿
 
-![恢复图解：搜索摘要、保存位置或时间，点击正式记录继续编辑，恢复本机草稿或上次打开的窗口](docs/images/04-recovery.png)
+![恢复图解：搜索摘要、保存位置或时间，点击正式记录继续编辑，恢复本机草稿或上次打开的窗口](https://raw.githubusercontent.com/lisontowind/siyuan-quick-notes/f553b7a52036ab8de1ea992c454cd6ad2a58550c/docs/images/04-recovery.png)
 
 *列表图为关键项示意，记录内容与时间为示例。*
 

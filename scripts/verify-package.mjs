@@ -17,15 +17,18 @@ for (const [field, maxBytes] of [['icon', 64 * 1024], ['preview', 512 * 1024]]) 
   assert.equal(name, `${field}.png`);
   assert(files[name]?.length && files[name].length <= maxBytes, `${name} exceeds marketplace image size limit`);
 }
+assert(files['preview.png'].length <= 128 * 1024, 'preview.png exceeds the 128 KiB package budget');
 for (const file of ['index.js', 'index.css', 'window.js', 'window.css', 'window.html', 'README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'docs/testing.md', 'docs/feasibility.md', 'docs/development.md', 'icon.png', 'preview.png', 'tray.ico', 'tray-lifetime.cjs']) {
   assert(files[file]?.length, `Missing ${file}`);
   assert.deepEqual(Buffer.from(files[file]), await readFile(`dist/${file}`), `Archive differs from dist: ${file}`);
 }
-// README images must remain available when the plugin is installed from the ZIP.
+// Documentation images use public HTTPS links; marketplace images stay local.
+assert(!Object.keys(files).some(name => name.startsWith('docs/images/')), 'Documentation images must not be bundled');
 const readme = strFromU8(files['README.md']);
 for (const match of readme.matchAll(/!\[[^\]]*\]\(([^)]+)\)/g)) {
   const name = match[1];
-  if (/^https?:\/\//.test(name)) continue;
+  if (/^https:\/\//.test(name)) continue;
+  assert(!name.startsWith('docs/images/'), `README documentation image must use a public HTTPS URL: ${name}`);
   assert(files[name]?.length, `Missing README image: ${name}`);
   assert.deepEqual(Buffer.from(files[name]), await readFile(name), `README image differs from source: ${name}`);
 }
