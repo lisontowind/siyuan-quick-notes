@@ -42,6 +42,20 @@ beforeEach(async () => {
 });
 afterEach(() => { windowListeners.get('beforeunload')?.(); vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 describe('renderer close protocol', () => {
+  it('uses English for runtime state, reload confirmation, and disconnect warnings without changing note text', async () => {
+    document.documentElement.lang = 'en-US';
+    response({ state: { ...state, docTitle: '我的中文标题', showSaved: true }, content: { text: '正文保持原样', revision: 1 } });
+    expect(elements.get('status')!.textContent).toBe('Saved to SiYuan');
+    expect(elements.get('title-display')!.textContent).toBe('我的中文标题');
+    elements.get('reload')!.listeners.get('click')!();
+    expect(elements.get('reload')!.textContent).toBe('Click again to discard this window’s changes');
+    await vi.advanceTimersByTimeAsync(7500);
+    expect(elements.get('status')!.textContent).toContain('Disconnected.');
+    elements.get('close')!.listeners.get('click')!();
+    expect(elements.get('status')!.textContent).toContain('Select and copy the text first.');
+    expect(window.close).not.toHaveBeenCalled();
+    expect(editor.text).toBe('正文保持原样');
+  });
   const pasteImage = async () => {
     const file = new File([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])], 'screenshot.png');
     const preventDefault = vi.fn();

@@ -9,8 +9,9 @@ import { defaults } from '../src/core/settings';
 import { FakeKernel } from './fake-kernel';
 
 // Optional integration with the user's installed parser; never starts SiYuan or writes its workspace.
-const enginePath = process.env.SIYUAN_LUTE_PATH ?? join(process.env.ProgramFiles || 'C:/Program Files', 'SiYuan/resources/stage/protyle/js/lute/lute.min.js');
-describe.skipIf(!existsSync(enginePath))('installed SiYuan Markdown engine (read-only)', () => {
+const enginePath = process.env.SIYUAN_LUTE_PATH ?? (process.platform === 'win32'
+  ? join(process.env.ProgramFiles || 'C:/Program Files', 'SiYuan/resources/stage/protyle/js/lute/lute.min.js') : undefined);
+describe.skipIf(!enginePath || !existsSync(enginePath))('installed SiYuan Markdown engine (read-only; skipped if unavailable, set SIYUAN_LUTE_PATH)', () => {
   it.each(['正文\n\n# 正文自己的标题', ''])('keeps old title text as a normal heading through the installed parser: %s', async text => {
     const parser = engine() as MarkdownEngine & { BlockDOM2Md(dom: string): string };
     const api = new FakeKernel(), repo = new NoteRepository(api, () => ({ ...defaults, notebook: api.notebook }), createMarkdownNormalizer(parser));
@@ -37,7 +38,7 @@ describe.skipIf(!existsSync(enginePath))('installed SiYuan Markdown engine (read
   function engine(): MarkdownEngine {
     const context = createContext({ console, TextEncoder, TextDecoder, setTimeout, clearTimeout });
     runInContext('window = globalThis', context);
-    runInContext(readFileSync(enginePath, 'utf8'), context);
+    runInContext(readFileSync(enginePath!, 'utf8'), context);
     return (context.Lute as { New(): MarkdownEngine }).New();
   }
   it.each([

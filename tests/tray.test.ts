@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { TrayAdapter, type TrayActions } from '../src/platform/tray';
 import { attachTrayLifetime } from '../src/platform/tray-lifetime';
 import { EventEmitter } from 'node:events';
+import type { DesktopPlatform } from '../src/platform/runtime';
 
 class FakeTray {
   static instances: FakeTray[] = [];
@@ -15,9 +16,10 @@ class FakeTray {
   removeAllListeners() { this.handlers.clear(); }
   setToolTip(text: string) { this.tooltip = text; }
   popUpContextMenu(menu: unknown) { this.menus.push(menu); }
+  setContextMenu = vi.fn((menu: unknown) => { this.menus.push(menu); });
   isDestroyed() { return this.destroyed; }
 }
-function setup() {
+function setup(platform: DesktopPlatform = 'windows') {
   FakeTray.instances = [];
   const actions: TrayActions = { createNote: vi.fn(), recent: vi.fn(), settings: vi.fn(), closeTray: vi.fn(), windows: vi.fn(() => []), focusWindow: vi.fn(), showOwner: vi.fn() };
   const report = vi.fn();
@@ -25,10 +27,61 @@ function setup() {
   const remote = { Tray: FakeTray, Menu: { buildFromTemplate: vi.fn((template: any) => template) },
     require: vi.fn(() => ({ attachTrayLifetime })), getCurrentWebContents: () => contents };
   const owner = new EventTarget();
-  const adapter = new TrayAdapter(remote, actions, report, owner, '/plugin/tray-lifetime.cjs');
+  const adapter = new TrayAdapter(remote, actions, report, owner, '/plugin/tray-lifetime.cjs', platform);
   return { actions, report, remote, adapter, owner, contents };
 }
 describe('independent quick-note tray', () => {
+  it('reattaches the Linux menu when an externally destroyed tray is recreated', () => {
+    const { adapter } = setup('linux'); adapter.start('tray.png', 'Linux');
+    const first = FakeTray.instances[0]; first.destroy();
+    adapter.start('tray.png', 'Linux');
+    expect(FakeTray.instances).toHaveLength(2); expect(first.handlers.size).toBe(0);
+    expect(FakeTray.instances[1].setContextMenu).toHaveBeenCalledOnce(); adapter.stop();
+  });
+  it('attaches a native Linux menu and refreshes only changed window snapshots', () => {
+    const { adapter, actions, remote } = setup('linux');
+    adapter.start('tray.png', 'Linux'); const tray = FakeTray.instances[0];
+    expect(tray.setContextMenu).toHaveBeenCalledOnce(); expect(tray.handlers.has('right-click')).toBe(false);
+    expect(tray.handlers.has('click')).toBe(false); expect(actions.createNote).not.toHaveBeenCalled();
+    expect(tray.menus[0][2].submenu[0].enabled).toBe(false);
+    tray.menus[0][0].click(); expect(actions.createNote).toHaveBeenCalledOnce();
+    adapter.refresh(); expect(remote.Menu.buildFromTemplate).toHaveBeenCalledOnce();
+    vi.mocked(actions.windows).mockReturnValue([{ id: 'a', label: 'Draft & A' }]); adapter.refresh();
+    expect(tray.menus.at(-1)[2].submenu[0].label).toBe('Draft && A');
+    const staleFocus = tray.menus.at(-1)[2].submenu[0].click;
+    staleFocus(); expect(actions.focusWindow).toHaveBeenCalledWith('a');
+    vi.mocked(actions.windows).mockReturnValue([{ id: 'a', label: 'Edited summary' }]); adapter.refresh();
+    expect(tray.menus.at(-1)[2].submenu[0].label).toBe('Edited summary');
+    adapter.refresh(); expect(tray.setContextMenu).toHaveBeenCalledTimes(3);
+    vi.mocked(actions.windows).mockReturnValue([]); adapter.refresh();
+    expect(tray.menus.at(-1)[2].label).toBe('管理速记窗口（0）');
+    staleFocus(); expect(actions.focusWindow).toHaveBeenCalledTimes(1);
+    const staleCreate = tray.menus.at(-1)[0].click;
+    adapter.stop(); staleCreate(); adapter.refresh();
+    expect(actions.createNote).toHaveBeenCalledTimes(1); expect(tray.destroy).toHaveBeenCalledOnce();
+    adapter.start('tray.png', 'Linux'); expect(FakeTray.instances[1].setContextMenu).toHaveBeenCalledOnce();
+    staleCreate(); expect(actions.createNote).toHaveBeenCalledTimes(1); adapter.stop();
+  });
+  it.each(['initial', 'refresh'])('cleans up a Linux tray after %s menu binding failure', phase => {
+    const { adapter, actions, report, remote, contents } = setup('linux');
+    if (phase === 'initial') remote.Menu.buildFromTemplate.mockImplementationOnce(() => { throw new Error('menu unavailable'); });
+    if (phase === 'initial') expect(() => adapter.start('tray.png', 'Linux')).toThrow('menu unavailable');
+    else {
+      adapter.start('tray.png', 'Linux');
+      FakeTray.instances[0].setContextMenu.mockImplementationOnce(() => { throw new Error('menu unavailable'); });
+      vi.mocked(actions.windows).mockReturnValue([{ id: 'a', label: 'A' }]); adapter.refresh();
+      expect(report).toHaveBeenCalledWith(expect.stringContaining('仍可使用顶栏'));
+    }
+    expect(FakeTray.instances[0].destroy).toHaveBeenCalledOnce(); expect(contents.eventNames()).toEqual([]);
+    adapter.refresh(); expect(FakeTray.instances[0].destroy).toHaveBeenCalledOnce();
+  });
+  it('destroys the Linux native menu on owner exit and ignores its callbacks', () => {
+    const { adapter, actions, contents } = setup('linux'); adapter.start('tray.png', 'Linux');
+    const tray = FakeTray.instances[0], stale = tray.menus[0][0].click;
+    contents.emit('destroyed'); stale(); adapter.refresh(); adapter.stop();
+    expect(tray.destroy).toHaveBeenCalledOnce(); expect(actions.createNote).not.toHaveBeenCalled();
+    expect(contents.eventNames()).toEqual([]);
+  });
   it('closes only the plugin tray from the context menu and rejects stale callbacks', () => {
     const { adapter, actions } = setup(); actions.closeTray = vi.fn(() => adapter.stop());
     adapter.start('tray.ico', 'Test'); const tray = FakeTray.instances[0];
@@ -92,8 +145,8 @@ describe('independent quick-note tray', () => {
     owner.dispatchEvent(new Event('pagehide'));
     expect(FakeTray.instances[1].destroy).toHaveBeenCalledOnce();
   });
-  it('creates one owned icon, handles left click, and does not show the main window for new notes', () => {
-    const { adapter, actions } = setup(); adapter.start('plugin/tray.ico', 'Test'); adapter.start('plugin/tray.ico', 'Test');
+  it.each(['windows', 'darwin'] as const)('creates one owned %s icon and handles left click without showing the main window', platform => {
+    const { adapter, actions } = setup(platform); adapter.start('plugin/tray.ico', 'Test'); adapter.start('plugin/tray.ico', 'Test');
     expect(FakeTray.instances).toHaveLength(1);
     const tray = FakeTray.instances[0]; expect(tray.icon).toBe('plugin/tray.ico'); expect(tray.tooltip).toContain('Test');
     tray.handlers.get('click')!(); expect(actions.createNote).toHaveBeenCalledOnce(); expect(actions.showOwner).not.toHaveBeenCalled();

@@ -2,10 +2,12 @@
   "name": "siyuan-quick-notes",
   "author": "Lisontowind",
   "url": "https://github.com/lisontowind/siyuan-quick-notes",
-  "version": "0.1.24",
+  "version": "0.1.27",
   "minAppVersion": "3.8.6",
   "backends": [
-    "windows"
+    "windows",
+    "darwin",
+    "linux"
   ],
   "frontends": [
     "desktop"
@@ -18,11 +20,11 @@
     "zh-CN": "悬浮速记"
   },
   "description": {
-    "default": "Floating Markdown notes for Windows with image previews, SiYuan autosave, and local draft recovery.",
+    "default": "Floating Markdown notes for Windows, macOS, and Linux with image previews, SiYuan autosave, and local draft recovery.",
     "zh-CN": "快捷键唤起悬浮便签，支持 Markdown、截图粘贴与图片预览，自动保存到思源，可恢复本机草稿。"
   },
   "readme": {
-    "default": "README.md",
+    "default": "README_en_US.md",
     "zh-CN": "README.md"
   },
   "keywords": [

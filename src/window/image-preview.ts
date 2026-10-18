@@ -1,3 +1,4 @@
+import { t } from '../core/i18n';
 import { StateField, type EditorState } from '@codemirror/state';
 import { syntaxTree } from '@codemirror/language';
 import { Decoration, EditorView, WidgetType, type DecorationSet } from '@codemirror/view';
@@ -42,20 +43,20 @@ export class ImagePreviewWidget extends WidgetType {
     const figure = document.createElement('figure');
     figure.className = 'qn-image-preview'; figure.contentEditable = 'false';
     const image = document.createElement('img');
-    image.alt = this.image.alt || '图片预览'; image.loading = 'lazy'; image.decoding = 'async';
+    image.alt = this.image.alt || t('图片预览'); image.loading = 'lazy'; image.decoding = 'async';
     image.draggable = false;
     const caption = document.createElement('figcaption');
     const message = document.createElement('span');
-    message.textContent = '图片加载中…'; message.setAttribute('role', 'status');
+    message.textContent = t('图片加载中…'); message.setAttribute('role', 'status');
     const edit = document.createElement('button');
-    edit.type = 'button'; edit.textContent = '编辑图片链接';
+    edit.type = 'button'; edit.textContent = t('编辑图片链接');
     edit.addEventListener('click', () => {
       view.dispatch({ selection: { anchor: this.image.from, head: this.image.to }, scrollIntoView: true });
       view.focus();
     });
-    image.addEventListener('load', () => { message.textContent = this.image.alt || '图片'; view.requestMeasure(); });
+    image.addEventListener('load', () => { message.textContent = this.image.alt || t('图片'); view.requestMeasure(); });
     image.addEventListener('error', () => {
-      image.hidden = true; message.textContent = '图片无法加载，请检查资源或链接';
+      image.hidden = true; message.textContent = t('图片无法加载，请检查资源或链接');
       figure.dataset.failed = 'true'; view.requestMeasure();
     });
     image.src = this.image.src;

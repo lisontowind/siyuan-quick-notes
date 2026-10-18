@@ -1,5 +1,7 @@
 # API 可行性报告
 
+0.1.26 已解除 Windows 专属入口限制，新增 macOS/Linux 平台适配。下文宿主源码与原生实测证据来自 Windows；跨平台自动化覆盖与尚未完成的 macOS/Linux 原生验收分别记录在 [测试记录](testing.md)。Linux 托盘改用 `setContextMenu`，Wayland 窗口控制与全局快捷键按宿主能力降级，具体实现见 [开发文档](development.md)。
+
 验证基线：本机 `C:/Program Files/SiYuan/resources/app/package.json` 为 3.8.6，Electron 主进程源码及宿主前端构建资源可直接读取。官方源码固定到 `v3.8.6`，SDK 为 `siyuan` 1.2.7。
 
 | 能力 | 源码检查结论 | 实现路线 |

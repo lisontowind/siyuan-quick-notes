@@ -16,6 +16,10 @@
 
 ## 功能说明配图
 
+2026-10-18 增加英文说明 `README_en_US.md` 与 `docs/images/en/` 下的五张配图：`00-header.png` 为英文题头图，其余四张对应便签操作、图片插入、保存位置和恢复列表。英文题头图用 HTML/CSS 排版并引用现有插件图标；两张便签配图直接使用主窗口的真实英文界面，不在截图后替换文字。设置与恢复列表仍为关键项示意，明确标注译文。五张英文图与中文操作图一样，先发布到仓库，再在 README 中引用固定提交 SHA 的 GitHub Raw 公开链接。构建排除整个 `docs/images/` 目录，源图仍保留用于重新制图。
+
+英文图生成命令为 `node scripts/render-docs.mjs --lang=en`，先构建当前窗口代码。沿用下述 `DOCS_PLAYWRIGHT`、`DOCS_CHROMIUM` 环境变量；可选 `DOCS_SHARP` 指向 Sharp 模块，启用 PNG 调色板优化（quality 85、dither 0、compressionLevel 9、effort 10）。四张操作图为 1680×915，题头图为 1200×480。安装包校验检查中英文 README 中说明图使用固定提交链接、对应本地源图存在，并禁止 `docs/images/` 下的图片进入安装包。无需新增插件构建或运行依赖。
+
 说明图源文件为 `docs/images/01-window.png`、`02-images.png`、`03-storage.png`、`04-recovery.png`，分别说明便签操作、图片插入、保存位置和最近记录与草稿恢复。README 通过固定到完整提交 SHA 的 `https://raw.githubusercontent.com/lisontowind/siyuan-quick-notes/<commit>/docs/images/<name>.png` 公开链接加载这些图片，避免后续修改主分支时改变已发布版本的配图。源图保留在仓库中，构建时排除整个 `docs/images/` 目录；根目录的集市图标与预览图仍打包。
 
 便签与图片预览使用构建后的 `window.html`、`window.js`、`window.css` 离线渲染，通过演示频道提供样例正文与保存状态，不连接思源工作空间。示例图片为现有插件图标。设置和最近记录为明确标注的关键项示意。图片尺寸为 1680×915，中文文字与实际界面一起渲染。

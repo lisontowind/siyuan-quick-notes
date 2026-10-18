@@ -21,6 +21,32 @@ class FakeWindow implements NativeWindow {
   getBounds() { return { x: this.options.x ?? 100, y: this.options.y ?? 100, width: this.options.width ?? 420, height: this.options.height ?? 320 }; }
 }
 describe('native windows and ownership', () => {
+  it('lets the compositor place a window when screen coordinates cannot be queried', async () => {
+    const adapter = new ElectronAdapter({ BrowserWindow: FakeWindow, screen: {
+      getCursorScreenPoint() { throw new Error('unavailable'); }, getPrimaryDisplay() { throw new Error('unavailable'); },
+      getAllDisplays() { throw new Error('unavailable'); },
+    } });
+    const window = await adapter.create('http://localhost/plugins/window.html', { width: 320, height: 240, pinned: false }) as FakeWindow;
+    expect(window.options.x).toBeUndefined(); expect(window.options.y).toBeUndefined();
+    expect(window.options.width).toBe(320); expect(window.destroyed).toBe(false); window.destroy();
+  });
+  it('keeps a usable window when the desktop rejects geometry, pin queries and focus', async () => {
+    class RestrictedWindow extends FakeWindow {
+      getBounds(): ReturnType<FakeWindow['getBounds']> { throw new Error('coordinates unavailable'); }
+      isAlwaysOnTop(): boolean { throw new Error('pin query unavailable'); }
+      isMinimized(): boolean { throw new Error('minimize query unavailable'); }
+      focus() { throw new Error('focus denied'); }
+    }
+    const area = { x: 0, y: 0, width: 1920, height: 1080 }, report = vi.fn();
+    const adapter = new ElectronAdapter({ BrowserWindow: RestrictedWindow, screen: { getCursorScreenPoint: () => ({ x: 0, y: 0 }),
+      getDisplayNearestPoint: () => ({ workArea: area }), getAllDisplays: () => [{ workArea: area }] } }, report);
+    const window = await adapter.create('http://localhost/plugins/window.html', { width: 420, height: 320, pinned: false }) as RestrictedWindow;
+    adapter.focus(window);
+    expect(window.shown).toBe(true); expect(window.destroyed).toBe(false);
+    expect(adapter.geometry(window)).toMatchObject({ width: 420, height: 320, pinned: false });
+    const warnings = report.mock.calls.length; adapter.geometry(window); adapter.focus(window);
+    expect(report).toHaveBeenCalledTimes(warnings); window.destroy();
+  });
   it('keeps dimensions stable over repeated restores and user resizing with Windows frame padding', async () => {
     class DecoratedWindow extends FakeWindow {
       getBounds() { const bounds = super.getBounds(); return { ...bounds, width: bounds.width + 4, height: bounds.height + 4 }; }
@@ -97,8 +123,9 @@ function harness(settings: Settings = { ...defaults, debounceMs: 10000 }, initia
   const persistHistory = vi.fn().mockResolvedValue(undefined), report = vi.fn(), confirmDelete = vi.fn().mockResolvedValue(true);
   const create = vi.fn(async (_url: string, _geometry: import('../src/types').Geometry) => { const win = new FakeWindow(); created.push(win); return win; });
   const upload = vi.fn(async (_images: import('../src/types').ImageInput[]) => '![截图](assets/test.png)');
+  const windowListChanged = vi.fn();
   const manager = new QuickNoteWindowManager({ create,
-    geometry: () => ({ width: 420, height: 320, pinned: false, open: true }), focus() {} }, repo, drafts, () => settings, history, persistHistory, report, () => {}, () => {}, confirmDelete, externalWindowCount, { upload });
+    geometry: () => ({ width: 420, height: 320, pinned: false, open: true }), focus() {} }, repo, drafts, () => settings, history, persistHistory, report, () => {}, () => {}, confirmDelete, externalWindowCount, { upload }, windowListChanged);
   const peer = new BroadcastChannel(manager.channelName), messages: Response[] = [];
   const snapshots = new Map<string, Pick<NoteRecord, 'text' | 'title' | 'revision'>>();
   let acknowledge = true;
@@ -112,12 +139,64 @@ function harness(settings: Settings = { ...defaults, debounceMs: 10000 }, initia
   };
   const request = (id: string, action: string, extra = {}) => peer.postMessage({ session: manager.session, windowId: id,
     requestId: crypto.randomUUID(), action, ...extra });
-  return { manager, repo, api, drafts, values, writes, created, create, persistHistory, messages, snapshots, request, report, confirmDelete, upload,
+  return { manager, repo, api, drafts, values, writes, created, create, persistHistory, messages, snapshots, request, report, confirmDelete, upload, windowListChanged,
     ignoreCollections: () => { acknowledge = false; },
     cleanup: async () => { await manager.dispose(); peer.close(); created.forEach(win => win.destroy()); vi.unstubAllGlobals(); } };
 }
 
+it.each(['en_US', 'zh_CN'])('passes SiYuan language %s into the isolated note renderer', async lang => {
+  const h = harness();
+  vi.stubGlobal('window', { siyuan: { config: { lang } } });
+  try {
+    await h.manager.open(createNote());
+    expect(new URL(h.create.mock.calls[0][0]).searchParams.get('lang')).toBe(lang === 'en_US' ? 'en-US' : 'zh-CN');
+  } finally { await h.cleanup(); }
+});
+
 describe('durable window shutdown and independent input', () => {
+  it('resumes a note after cancelling deletion even if unpinning and restoring pin both fail', async () => {
+    const h = harness(), note = createNote();
+    try {
+      await h.manager.open(note);
+      vi.spyOn((h.manager as any).adapter, 'geometry').mockReturnValue({ width: 420, height: 320, pinned: true, open: true });
+      h.created[0].setAlwaysOnTop = () => { throw new Error('pin unavailable'); };
+      h.confirmDelete.mockResolvedValue(false);
+      expect(await h.manager.deleteNote(note)).toBe(false); expect(h.confirmDelete).toHaveBeenCalledOnce();
+      const service = h.manager.windows.get(note.id)!.service;
+      await service.edit('Kept after cancelling', 1, false); expect(await service.flush()).toBe(true);
+      expect(service.phase).toBe('saved');
+    } finally { await h.cleanup(); }
+  });
+  it('notifies tray subscribers after opening, editing, reloading and closing windows', async () => {
+    const h = harness(), note = createNote(), snapshots: string[][] = [];
+    h.windowListChanged.mockImplementation(() => { snapshots.push([...h.manager.windows.values()].map(entry => entry.service.note.text)); });
+    try {
+      await h.manager.open(note); expect(snapshots.at(-1)).toEqual(['']);
+      const service = h.manager.windows.get(note.id)!.service;
+      await service.edit('Original summary', 1, false); await service.flush();
+      expect(snapshots.at(-1)).toEqual(['Original summary']);
+      await service.edit('Edited summary', 2, false); expect(snapshots.at(-1)).toEqual(['Edited summary']);
+      await service.reload(); expect(snapshots.at(-1)).toEqual(['Original summary']);
+      h.request(note.id, 'close-draft');
+      await vi.waitFor(() => expect(h.manager.windows.size).toBe(0)); expect(snapshots.at(-1)).toEqual([]);
+      await h.manager.open(createNote()); h.created.at(-1)!.destroy(); expect(snapshots.at(-1)).toEqual([]);
+    } finally { await h.cleanup(); }
+  });
+  it('saves edits after unsupported pin/minimize operations and a failed tray update', async () => {
+    const h = harness(), note = createNote();
+    try {
+      await h.manager.open(note);
+      h.created[0].setAlwaysOnTop = () => { throw new Error('pin unavailable'); };
+      h.created[0].minimize = () => { throw new Error('minimize unavailable'); };
+      h.windowListChanged.mockImplementation(() => { throw new Error('tray unavailable'); });
+      const service = h.manager.windows.get(note.id)!.service;
+      h.request(note.id, 'pin'); h.request(note.id, 'minimize');
+      await vi.waitFor(() => expect(h.report).toHaveBeenCalledWith(expect.stringContaining('无法最小化')));
+      expect(service.phase).toBe('empty'); expect(service.error).toBeUndefined();
+      await service.edit('Still editable', 1, false); expect(await service.flush()).toBe(true);
+      expect(service.phase).toBe('saved'); expect(h.manager.windows.size).toBe(1);
+    } finally { h.windowListChanged.mockImplementation(() => {}); await h.cleanup(); }
+  });
   it('uploads for the requesting window without delaying heartbeats or other window input', async () => {
     const h = harness(), note = createNote(), other = createNote(), release = deferred();
     const images = [{ name: '截图.png', data: new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]).buffer }];

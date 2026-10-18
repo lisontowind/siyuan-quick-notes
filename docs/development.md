@@ -1,5 +1,27 @@
 # 开发与构建
 
+## 0.1.27 双语说明与主窗口翻译
+
+2026-10-18 增加完整英文使用说明及英文题头/操作配图。`plugin.json` 的 `readme.default` 指向 `README_en_US.md`，`zh-CN` 继续使用 `README.md`，两份文档互链。中英文操作配图及英文题头图均通过固定提交 SHA 的 GitHub Raw 链接加载，构建排除整个 `docs/images/` 目录。更新说明图不增加运行依赖，制图方法见 [品牌素材记录](branding.md)。
+
+悬浮便签主窗口通过 URL 的 `lang` 参数继承 `window.siyuan.config.lang`，兼容 `en_US`/`en-US`，缺省保留中文。`src/core/i18n.ts` 集中管理界面译文；初始化翻译静态 HTML，动态菜单、标题提示、编辑器、图片预览和保存状态通过同一翻译函数显示。仅翻译插件自有的提示与已知错误前缀，保留文档标题、正文、文件名及未知内核/系统诊断。修改思源语言后重新加载插件；设置、恢复列表与托盘暂未全面英文化。保存协议与存储格式不变。
+
+0.1.26 增加 Windows、macOS、Linux 桌面兼容。`plugin.json` 声明 `windows`、`darwin`、`linux`，运行时只在 `desktop` 主窗口初始化；浏览器、移动端和 `desktop-window` 均不注册入口。平台映射集中在 `src/platform/runtime.ts`，继续使用思源管理的 `⌥⌘N` 命令，macOS 显示 Option + Command + N，Windows/Linux 显示 Ctrl + Alt + N。编辑器沿用 CodeMirror 的 Mod-s。
+
+Windows 托盘继续使用 ICO；Linux 从已有 32px 品牌 PNG 生成 `tray.png`；macOS 由构建脚本绘制透明黑色便签轮廓，生成 `trayTemplate.png`（16px/72dpi）和 `trayTemplate@2x.png`（32px/144dpi）。文件名保持原样供 Electron 识别 Template 与 Retina。生成只使用 Node.js 内置模块，不增加依赖；安装包校验检查尺寸、密度、透明背景和单色像素。
+
+Linux 使用 `setContextMenu` 绑定原生托盘菜单，不依赖 `right-click` 或 `popUpContextMenu`。窗口管理器在发布状态和移除窗口后通知托盘，托盘仅在窗口 ID/摘要列表变化时重建菜单。旧菜单的窗口入口先检查窗口是否仍存在；停用、初始化失败及所属页面销毁继续使用已有主进程清理机制。动态更新失败会清理托盘并报告顶栏替代入口，不阻断编辑和保存。Windows/macOS 保留左键新建、右键动态菜单。[Electron 托盘文档](https://www.electronjs.org/docs/latest/api/tray)
+
+窗口适配器保留每窗口尺寸校准；鼠标坐标查询失败时尝试主显示器，仍失败则不指定位置，由系统放置。几何或置顶查询异常使用已知状态；聚焦、最小化、置顶失败仅报告操作失败，不把自动保存服务标为错误。Wayland 可能静默忽略这些请求，因此不据调用成功宣称支持精确定位、置顶或主动聚焦，也不修改宿主启动参数。[Electron 窗口文档](https://www.electronjs.org/docs/latest/api/browser-window)、[全局快捷键文档](https://www.electronjs.org/docs/latest/api/global-shortcut)
+
+三平台共用下述 0.1.25 草稿布局；仅 Windows 执行 LOCALAPPDATA 旧目录迁移。GitHub Actions 在 Windows/macOS/Ubuntu 上使用 Node.js 22 执行 `npm ci` 和 `npm run check`；这些检查不启动思源，不能替代原生界面验收。本机 Lute 集成测试可通过 `SIYUAN_LUTE_PATH` 指定解析器，Windows 另尝试默认安装路径，缺失时明确跳过。
+
+打包排除说明图时先将 `fs.cp` 的源路径解析为绝对路径，再处理 Windows 命名空间前缀；避免 POSIX 下相对路径与绝对路径比较导致说明图误入安装包。三个平台都由同一脚本生成通用 `package.zip`。
+
+0.1.25 将恢复草稿与 `windows.json` 迁到 `<工作空间>/data/storage/petal/siyuan-quick-notes/drafts/<设备 UUID>/`。设备 UUID 通过独占创建保存在 `os.homedir()/.siyuan/quick-notes-device-id`，不随工作空间同步；多空间并发首次加载会复用同一个标识，损坏时拒绝初始化，不自动生成新标识导致旧草稿失联。插件只枚举当前设备子目录，其他设备的草稿、位置与打开状态不参与恢复；正式记录和正文的同步语义不变。设备标识文件应随本机配置备份，但不要复制到另一台电脑。
+
+Windows 首次加载按旧算法计算工作空间路径摘要，迁移 `%LOCALAPPDATA%/SiYuanQuickNotes/<摘要>/` 内 UUID 命名的 JSON 与 `windows.json`。通过临时文件、fsync、逐字节回读校验和重命名保存到新目录，原文件不删除，已有目标文件不覆盖；损坏源文件也原样保留，由恢复列表校验并报告。全部完成后写 `.legacy-migration-v1` 标记，之后不再导入旧备份，防止已保存或已删除草稿复活。失败时不启动窗口或保存服务，排查后可重试。设备目录在工作空间内，可能同步到其他电脑；设备隔离不等于同步排除，需要时由用户排除 `storage/petal/siyuan-quick-notes/drafts/`。本次只调整存储，不解除 Windows 桌面端限制。
+
 0.1.24 优化安装包体积。README 四张说明图改为固定提交版本的 GitHub Raw 公开链接，构建复制文档时排除 `docs/images/`。集市声明的 `icon.png`、`preview.png` 仍保留在包内，预览图从原始素材重新缩放为 800×320 并优化 PNG 调色板编码，从 495,661 字节降至 97,627 字节。安装包校验禁止带入说明图或使用本地说明图引用，为预览图设置 128 KiB 的项目体积预算，并检查其余本地图片均存在且与源文件一致。图片处理仅在更新素材时进行，不增加构建或运行依赖。便签运行逻辑保持不变。
 
 0.1.23 更新插件图文说明与中英文简介。README 新增功能概览和四张配图，覆盖便签操作、图片插入、保存位置、最近记录与本机草稿恢复。便签与图片预览使用当前构建产物离线渲染；设置与列表明确标为关键项示意。配图生成方法见 [品牌素材记录](branding.md)。该版构建递归复制文档目录，安装包校验检查 README 引用的本地图片均存在且与源文件一致。
@@ -47,7 +69,7 @@ npm run build
 
 0.1.13 修复关闭空间后托盘残留：宿主会直接 `BrowserWindow.destroy()`，不能保证触发插件卸载或 DOM 退出事件。独立 `tray-lifetime.cjs` 通过宿主已有的 `remote.require` 在主进程执行，绑定所属 WebContents 的 `destroyed`、`render-process-gone` 和已提交的主框架导航 `did-navigate`，直接清理独立托盘，不再回调已销毁的渲染器。停用、初始化失败和页面退出会调用同一清理句柄并移除这些监听；取消关闭、隐藏、最小化、子框架及同文档导航不会清理。生命周期模块加载失败时回滚图标，避免创建无法可靠清理的托盘。
 
-正式文档仅通过内核 API 写入，不直接修改 `.sy` 文件或数据库。本机草稿位于 `%LOCALAPPDATA%/SiYuanQuickNotes/<工作空间路径摘要>/`，采用临时文件、fsync 和原子重命名；不进入云同步。
+正式文档仅通过内核 API 写入，不直接修改 `.sy` 文件或数据库。草稿采用临时文件、fsync 和原子重命名；0.1.25 起存于上述插件数据目录并按设备隔离。之前位于 `%LOCALAPPDATA%/SiYuanQuickNotes/<工作空间路径摘要>/`，旧路径仅供首次迁移读取。
 
 0.1.15 修复插件更新后的旧便签失联和关闭无效。本机思源 3.8.6 的插件生命周期管理器给 `onunload` 5 秒总期限；原窗口快照收集同样等待 5 秒，且排在降级窗口草稿写入后，容易超过宿主预算。现在 `onunload` 立即启动原生窗口停用，停用时快照收集等待 2.5 秒，整个窗口管理器停用最多等待 4 秒。超时后停止服务与频道，并解除对保留窗口原生关闭的拦截；未确认落盘的正文保留供复制。迟到创建的原生窗口直接销毁，迟到快照不用于关闭窗口。正常手动关闭仍使用原来的 5 秒收集期限。
 

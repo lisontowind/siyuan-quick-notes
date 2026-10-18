@@ -1,14 +1,16 @@
+import { t } from '../core/i18n';
 import { IMAGE_ACCEPT, MAX_IMAGE_BYTES, MAX_IMAGES, imageFormat } from '../core/images';
 import type { ImageInput } from '../types';
 
 export async function readImages(files: File[]): Promise<ImageInput[]> {
   if (!files.length || files.length > MAX_IMAGES || files.some(file => !file.size)
     || files.reduce((sum, file) => sum + file.size, 0) > MAX_IMAGE_BYTES) {
-    throw new Error('每次最多插入 10 张图片，总大小不超过 20 MB');
+    throw new Error(t('每次最多插入 10 张图片，总大小不超过 20 MB'));
   }
   return Promise.all(files.map(async file => {
-    const data = await file.arrayBuffer(); imageFormat(data);
-    return { name: file.name.slice(0, 255) || '截图', data };
+    const data = await file.arrayBuffer();
+    try { imageFormat(data); } catch (error) { throw new Error(t(error instanceof Error ? error.message : String(error))); }
+    return { name: file.name.slice(0, 255) || t('截图'), data };
   }));
 }
 export function bindImageInputs(editor: HTMLElement, picker: HTMLInputElement, button: HTMLElement,

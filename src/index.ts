@@ -7,7 +7,9 @@ import { createNote, noteLabel, noteReference, migrateNoteTitle } from './core/i
 import { SerialQueue } from './core/serial';
 import { ElectronAdapter } from './platform/desktop';
 import { TrayAdapter } from './platform/tray';
+import { isDesktopPlatform, shortcutLabel, trayIconName, type DesktopPlatform } from './platform/runtime';
 import { LocalDraftStore } from './platform/drafts';
+import { loadDeviceId, migrateLegacyDrafts } from './platform/draft-location';
 import { NoteRepository } from './services/repository';
 import { SiYuanApi } from './services/kernel';
 import { createMarkdownNormalizer } from './services/markdown';
@@ -30,6 +32,7 @@ export default class QuickNotesPlugin extends Plugin {
   private trayIconPath?: string;
   private trayLifetimePath?: string;
   private workspaceName = '';
+  private platform: DesktopPlatform = 'windows';
   private remote?: any;
   private disposed = false;
   private unloading = false;
@@ -41,7 +44,7 @@ export default class QuickNotesPlugin extends Plugin {
   private shortcutListener = (_: unknown, data: { failed?: string[] }) => {
     const command = this.commands.find(command => command.langKey === 'newQuickNote');
     if (data.failed?.some(key => key === command?.customHotkey || key === command?.hotkey)) {
-      this.report('全局快捷键注册失败：可能被其他程序占用，请在思源快捷键设置中更换绑定');
+      this.report('全局快捷键注册失败：可能被其他程序占用或当前桌面环境不支持，请在思源快捷键设置中更换绑定，也可从思源顶栏新建速记');
     }
   };
   private report = (text: string): void => { if (!this.disposed) showMessage(text, 7000, 'error'); console.warn('[Quick Notes]', text); };
@@ -65,32 +68,41 @@ export default class QuickNotesPlugin extends Plugin {
   async onload(): Promise<void> {
     this.disposed = false;
     this.unloading = false;
-    if (getFrontend() !== 'desktop' || getBackend() !== 'windows') return;
+    const backend = getBackend();
+    if (getFrontend() !== 'desktop' || !isDesktopPlatform(backend)) return;
+    this.platform = backend;
     this.settingsValue = parseSettings(await this.loadData('settings.json'));
     const history: unknown = await this.loadData('history.json');
     this.historyValue = parseHistory(history, this.settingsValue.historyLimit);
     const lute = window.Lute?.New();
-    this.repository = new NoteRepository(new SiYuanApi(), () => this.settingsValue,
-      lute ? createMarkdownNormalizer(lute) : undefined);
     const fs = hostRequire('fs/promises') as typeof import('node:fs/promises');
     const path = hostRequire('path') as typeof import('node:path');
     const nodeCrypto = hostRequire('crypto') as typeof import('node:crypto');
     const process = hostRequire('process') as NodeJS.Process;
+    const os = hostRequire('os') as typeof import('node:os');
     const config = window.siyuan.config as unknown as { system: { workspaceDir: string } };
     const workspace = config.system.workspaceDir;
-    if (!workspace || !process.env.LOCALAPPDATA) throw new Error('无法定位工作空间或本机恢复草稿目录');
+    if (!workspace || !path.isAbsolute(workspace)) throw new Error('无法定位工作空间');
+    const deviceId = await loadDeviceId(fs, path, nodeCrypto, os.homedir());
+    const draftDirectory = path.join(workspace, 'data', 'storage', 'petal', this.name, 'drafts', deviceId);
     const workspaceKey = nodeCrypto.createHash('sha256').update(workspace.toLowerCase()).digest('hex').slice(0, 24);
+    const legacyDirectory = process.platform === 'win32' && process.env.LOCALAPPDATA
+      ? path.join(process.env.LOCALAPPDATA, 'SiYuanQuickNotes', workspaceKey) : undefined;
+    await migrateLegacyDrafts(fs, path, nodeCrypto, draftDirectory, legacyDirectory);
     this.workspaceName = path.basename(workspace);
-    this.trayIconPath = path.join(workspace, 'data', 'plugins', this.name, 'tray.ico');
+    this.trayIconPath = path.join(workspace, 'data', 'plugins', this.name, trayIconName(this.platform));
     this.trayLifetimePath = path.join(workspace, 'data', 'plugins', this.name, 'tray-lifetime.cjs');
-    this.drafts = new LocalDraftStore(fs, path, path.join(process.env.LOCALAPPDATA, 'SiYuanQuickNotes', workspaceKey));
+    this.drafts = new LocalDraftStore(fs, path, draftDirectory);
+    this.repository = new NoteRepository(new SiYuanApi(), () => this.settingsValue,
+      lute ? createMarkdownNormalizer(lute) : undefined);
     try {
       this.remote = hostRequire('@electron/remote');
-      const adapter = new ElectronAdapter(this.remote);
+      const adapter = new ElectronAdapter(this.remote, this.report);
       this.manager = new QuickNoteWindowManager(adapter, this.repository, this.drafts, () => this.settingsValue, this.historyValue,
         history => this.persistHistory(history), this.report,
         id => { void openTab({ app: this.app, doc: { id, action: ['cb-get-focus'] } }).catch(error => this.report(message(error))); },
-        () => { void this.showRecent(); }, this.confirmDelete, () => this.fallbackServices.size);
+        () => { void this.showRecent(); }, this.confirmDelete, () => this.fallbackServices.size,
+        undefined, () => this.tray?.refresh());
     } catch (error) { this.nativeError = message(error); }
     this.ipc = hostRequire('electron').ipcRenderer;
   }
@@ -136,7 +148,7 @@ export default class QuickNotesPlugin extends Plugin {
           const owner = this.remote.getCurrentWindow();
           if (!owner.isDestroyed()) { if (owner.isMinimized()) owner.restore(); owner.show(); owner.focus(); }
         },
-      }, this.report, window, this.trayLifetimePath!);
+      }, this.report, window, this.trayLifetimePath!, this.platform);
       this.tray.start(this.trayIconPath!, this.workspaceName);
     } catch (error) { this.report(`独立速记托盘不可用：${message(error)}。仍可使用顶栏和快捷键。`); }
   }
@@ -159,7 +171,7 @@ export default class QuickNotesPlugin extends Plugin {
       }), () => {
         // 3.8.6 supports a tab argument; SDK 1.2.7 still declares the one-argument form.
         (openSetting as unknown as (app: typeof this.app, tab: string) => void)(this.app, 'keymap');
-      }, () => { void this.showRecent(); }, this.report, value => this.repository!.resolveTarget(createNote(), value));
+      }, () => { void this.showRecent(); }, this.report, value => this.repository!.resolveTarget(createNote(), value), this.platform);
       this.setting.open('悬浮速记');
     } catch (error) { this.report(message(error)); }
   }
@@ -186,7 +198,7 @@ export default class QuickNotesPlugin extends Plugin {
         item, label: item.summary || item.target?.path.split('/').pop() || '速记', path: item.target?.path || '', open: async () => {
         if (this.manager) await this.manager.reopen(item); else openWindow({ doc: { id: item.docId! } });
       } }))];
-      if (!entries.length) list.textContent = '暂无速记。使用 Ctrl + Alt + N 新建。';
+      if (!entries.length) list.textContent = `暂无速记。使用 ${shortcutLabel(this.platform)} 或思源顶栏新建。`;
       const appendRow = (item: HistoryRecord, label: string, searchable: string, open: () => Promise<void>) => {
         const row = document.createElement('div'); row.className = 'qn-history-row'; row.dataset.search = searchable.toLocaleLowerCase();
         const button = document.createElement('button'); button.className = 'qn-history-item';

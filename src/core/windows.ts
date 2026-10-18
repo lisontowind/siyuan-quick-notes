@@ -7,6 +7,7 @@ import { createNote, noteReference, noteLabel } from './identity';
 import { SerialQueue, TriggerGate } from './serial';
 import { validRequest } from './protocol';
 import { ImageUploadService } from '../services/images';
+import { hostLocale } from './i18n';
 
 export type HistoryRecord = NoteReference & { summary?: string };
 export interface WindowEntry { native?: NativeWindow; service: AutoSaveService; geometry: Geometry; lastFocus: number; closing: boolean }
@@ -36,7 +37,7 @@ export class QuickNoteWindowManager {
     private openDoc: (id: string) => void, private showRecent: () => void,
     private confirmDelete: () => Promise<boolean> = async () => false,
     private externalWindowCount: () => number = () => 0,
-    private images = new ImageUploadService()) {
+    private images = new ImageUploadService(), private windowListChanged: () => void = () => {}) {
     this.channelName = `siyuan-quick-notes:${this.session}`;
     this.channel = new BroadcastChannel(this.channelName);
     this.channel.onmessage = event => {
@@ -111,6 +112,7 @@ export class QuickNoteWindowManager {
     const work = (async () => {
       const url = new URL(`/plugins/siyuan-quick-notes/window.html`, location.origin);
       url.searchParams.set('channel', this.channelName); url.searchParams.set('session', this.session); url.searchParams.set('windowId', note.id);
+      url.searchParams.set('lang', hostLocale());
       try {
         if (persistDraft && !await entry.service.persist()) throw new Error('副本草稿未确认落盘，未打开新窗口，请重试');
         entry.native = await this.adapter.create(url.href, geometry);
@@ -125,12 +127,12 @@ export class QuickNoteWindowManager {
         for (const event of ['move', 'resize']) entry.native.on(event, () => this.scheduleState());
         entry.native.on('closed', () => {
           if (!this.active) return;
-          if (this.windows.has(note.id)) { entry.service.dispose(); this.windows.delete(note.id); this.scheduleState(); }
+          if (this.windows.has(note.id)) { entry.service.dispose(); this.windows.delete(note.id); this.notifyWindowList(); this.scheduleState(); }
         });
         entry.native.webContents.on('will-navigate', (event: { preventDefault(): void }) => event.preventDefault());
         entry.native.webContents.on('new-window', (event: { preventDefault(): void }) => event.preventDefault());
         this.focus(note.id); this.publish(note.id); this.scheduleState();
-      } catch (error) { entry.service.dispose(); this.windows.delete(note.id); throw error; }
+      } catch (error) { entry.service.dispose(); this.windows.delete(note.id); this.notifyWindowList(); throw error; }
     })();
     this.pending.set(note.id, work);
     try { await work; } finally { this.pending.delete(note.id); }
@@ -142,7 +144,11 @@ export class QuickNoteWindowManager {
   }
   private focus(id: string): void {
     const entry = this.windows.get(id);
-    if (entry?.native && !entry.native.isDestroyed()) { this.adapter.focus(entry.native); entry.lastFocus = Date.now(); this.send({ windowId: id, focus: true }); }
+    if (entry?.native && !entry.native.isDestroyed()) {
+      try { this.adapter.focus(entry.native); }
+      catch (error) { this.report(`窗口唤醒失败：${message(error)}。可从系统窗口列表打开便签。`); }
+      entry.lastFocus = Date.now(); this.send({ windowId: id, focus: true });
+    }
   }
   private send(value: Omit<Response, 'session'>): void { if (this.active) this.channel.postMessage({ ...value, session: this.session }); }
   private publish(id: string, requestId?: string, content = false): void {
@@ -152,6 +158,15 @@ export class QuickNoteWindowManager {
       title: noteLabel(note, 40, '新速记'), docTitle: note.docTitle || note.docPath?.split('/').pop() || note.target?.path.split('/').pop(), phase: entry.service.phase, error: entry.service.error,
       localRevision: entry.service.localRevision, pinned: this.bounds(entry).pinned, dark: this.dark, showSaved: this.settings().showSaved };
     this.send({ windowId: id, requestId, state, ...(content ? { content: { text: note.text, revision: note.revision } } : {}) });
+    this.notifyWindowList();
+  }
+  private notifyWindowList(): void {
+    try { this.windowListChanged(); }
+    catch (error) { this.report(`托盘窗口列表更新失败：${message(error)}`); }
+  }
+  private setPinned(entry: WindowEntry, pinned: boolean): void {
+    try { entry.native?.setAlwaysOnTop(pinned); }
+    catch (error) { this.report(`当前桌面环境无法置顶：${message(error)}`); }
   }
   private async handle(req: Request): Promise<void> {
     const entry = this.windows.get(req.windowId); if (!entry || !this.active) return;
@@ -186,8 +201,13 @@ export class QuickNoteWindowManager {
       case 'close': await this.closeWindow(req.windowId, false); break;
       case 'close-draft': await this.closeWindow(req.windowId, true); break;
       case 'delete': await this.deleteNote(service.note); break;
-      case 'pin': entry.native?.setAlwaysOnTop(!this.bounds(entry).pinned); this.scheduleState(); break;
-      case 'minimize': entry.native?.minimize(); break;
+      case 'pin':
+        this.setPinned(entry, !this.bounds(entry).pinned); this.scheduleState();
+        break;
+      case 'minimize':
+        try { entry.native?.minimize(); }
+        catch (error) { this.report(`当前桌面环境无法最小化：${message(error)}`); }
+        break;
       case 'new': await this.open(createNote()); break;
       case 'open': if (await service.flush() && service.note.docId) this.openDoc(service.note.docId); break;
       case 'recent': this.showRecent(); break;
@@ -256,6 +276,7 @@ export class QuickNoteWindowManager {
     this.geometries[id] = { ...this.bounds(entry), open: false,
       ...(entry.service.note.docId ? { note: noteReference(entry.service.note) } : {}) };
     entry.closing = true; entry.service.dispose(); this.windows.delete(id);
+    this.notifyWindowList();
     if (entry.native && !entry.native.isDestroyed()) entry.native.destroy();
     if (persist) await this.persistState();
   }
@@ -291,7 +312,7 @@ export class QuickNoteWindowManager {
     let completed: (() => void) | undefined, work: Promise<void> | undefined;
     this.deleting.add(item.id);
     try {
-      if (pinned) entry?.native?.setAlwaysOnTop(false);
+      if (pinned && entry) this.setPinned(entry, false);
       if (!await this.confirmDelete() || this.tearingDown || !this.active) return false;
       work = new Promise<void>(resolve => { completed = resolve; }); this.deletionWork.add(work);
       if (entry) {
@@ -308,7 +329,7 @@ export class QuickNoteWindowManager {
       completed?.(); if (work) this.deletionWork.delete(work);
       this.deleting.delete(item.id);
       if (entry && this.windows.has(item.id) && !this.tearingDown) {
-        if (pinned) entry.native?.setAlwaysOnTop(true);
+        if (pinned) this.setPinned(entry, true);
         entry.closing = false; entry.service.resume(); this.send({ windowId: item.id, resume: true });
       }
     }
