@@ -16,13 +16,69 @@ class MemoryDrafts implements DraftStore {
   async remove(id: string) { this.values.delete(id); }
   async list() { return [...this.values.values()]; }
 }
-function setup() {
+function setup(autoSaveToSiYuan = () => false) {
   const api = new FakeKernel(), drafts = new MemoryDrafts(), repo = new NoteRepository(api, () => ({ ...defaults, notebook: api.notebook }));
-  const service = new AutoSaveService(createNote(), repo, drafts, () => 800, () => {}, () => ({ width: 420, height: 320, pinned: false }));
+  const service = new AutoSaveService(createNote(), repo, drafts, () => 800, () => {}, () => ({ width: 420, height: 320, pinned: false }), undefined, autoSaveToSiYuan);
   return { api, drafts, repo, service };
 }
 afterEach(() => vi.useRealTimers());
 describe('autosave and recovery', () => {
+  it('automatically saves a new note after the configured delay when enabled and keeps syncing after disabling', async () => {
+    vi.useFakeTimers(); let enabled = true;
+    const { service, api, drafts } = setup(() => enabled);
+    try {
+      await service.edit('first', 1); await vi.advanceTimersByTimeAsync(799);
+      expect(api.calls).toEqual([]); expect(drafts.values.get(service.note.id)?.note.text).toBe('first');
+      await vi.advanceTimersByTimeAsync(1);
+      expect(service.note).toMatchObject({ siyuanSaved: true, savedRevision: 1 });
+      expect(api.blocks.size).toBe(1); expect(drafts.values.size).toBe(0);
+      enabled = false; service.settingsChanged();
+      await service.edit('second', 2); await vi.advanceTimersByTimeAsync(800);
+      expect(service.note.savedRevision).toBe(2); expect(api.blocks.size).toBe(1);
+      expect(api.blocks.get(service.note.blockId)?.raw).toContain('second');
+    } finally { service.dispose(); }
+  });
+  it('starts saving an open draft when enabled and reads the current setting before a pending first save', async () => {
+    vi.useFakeTimers(); let enabled = false;
+    const { service, api } = setup(() => enabled);
+    try {
+      await service.edit('draft', 1); await vi.advanceTimersByTimeAsync(800); expect(api.calls).toEqual([]);
+      enabled = true; service.settingsChanged(); enabled = false;
+      await vi.advanceTimersByTimeAsync(800); expect(api.calls).toEqual([]);
+      enabled = true; service.settingsChanged(); await vi.advanceTimersByTimeAsync(800);
+      expect(service.note).toMatchObject({ siyuanSaved: true, savedRevision: 1 });
+    } finally { service.dispose(); }
+  });
+  it('resumes a nonempty draft on reopening with automatic SiYuan saving enabled', async () => {
+    vi.useFakeTimers(); const { service, repo, drafts, api } = setup();
+    await service.edit('recovered', 1, false); service.dispose();
+    const recovered = new AutoSaveService(drafts.values.get(service.note.id)!.note, repo, drafts, () => 800, () => {},
+      () => ({ width: 320, height: 320, pinned: false }), undefined, () => true);
+    try {
+      await vi.advanceTimersByTimeAsync(800);
+      expect(recovered.note.siyuanSaved).toBe(true); expect(api.blocks.size).toBe(1);
+    } finally { recovered.dispose(); }
+  });
+  it('skips empty automatic saves but saves title-only notes and leaves explicit empty-save errors visible', async () => {
+    vi.useFakeTimers(); const { service, api } = setup(() => true);
+    try {
+      await service.edit(' \n ', 1); await vi.advanceTimersByTimeAsync(800);
+      expect(await service.flush()).toBe(true); expect(service.error).toBeUndefined(); expect(api.calls).toEqual([]);
+      expect(await service.saveToSiYuan()).toBe(false); expect(service.error).toContain('内容为空');
+      await service.edit('', 2, true, undefined, '仅标题'); await vi.advanceTimersByTimeAsync(800);
+      expect(service.note.siyuanSaved).toBe(true); expect(unwrapNoteMarkdown(service.note.baseline!).caption).toBe('仅标题');
+    } finally { service.dispose(); }
+  });
+  it('retains a failed automatic save as a draft and retries without duplicating the partially created document', async () => {
+    vi.useFakeTimers(); const { service, api, drafts } = setup(() => true);
+    try {
+      api.fail = '/api/block/appendBlock'; await service.edit('keep me', 1); await vi.advanceTimersByTimeAsync(800);
+      expect(service.phase).toBe('error'); expect(service.note.siyuanSaved).toBe(false);
+      expect(drafts.values.get(service.note.id)?.note.text).toBe('keep me'); expect(api.docs.size).toBe(1);
+      api.fail = undefined; expect(await service.flush()).toBe(true);
+      expect(service.note.siyuanSaved).toBe(true); expect(api.docs.size).toBe(1); expect(api.blocks.size).toBe(1);
+    } finally { service.dispose(); }
+  });
   it('persists category-only changes without changing text and saves title-only native callouts', async () => {
     const { service, drafts, api } = setup();
     try {

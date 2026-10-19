@@ -7,7 +7,7 @@ import type { RecentAction, RecentItem, RecentPage, RecentRequest, RecentRespons
 import { WindowSettingsPanel } from './settings-panel';
 import { windowIcons } from './icons';
 import { CleanupPanel } from './cleanup-panel';
-import { DraftVersionsDialog } from './draft-versions';
+import { DraftVersionsPanel } from './draft-versions';
 import '../styles/cleanup.css';
 
 const params = new URLSearchParams(location.search), session = params.get('session') || '', channelName = params.get('channel') || '';
@@ -55,10 +55,11 @@ const cleanupPanel = new CleanupPanel(document.getElementById('cleanup-panel')!,
   start: async (mode, selections, discard) => { const value = await cleanupRequest('cleanup-start', { mode, selections, discard }); if (!value.cleanupProgress) throw new Error(t('操作未确认，请刷新后重试')); return value.cleanupProgress; },
   cancel: async () => { await cleanupRequest('cleanup-cancel'); }, snooze: async () => { await cleanupRequest('cleanup-snooze'); },
 });
-const versionsDialog = new DraftVersionsDialog(document.body, {
+const versionsView = new DraftVersionsPanel(document.getElementById('drafts-panel')!, {
   load: async id => { const value = await cleanupRequest('draft-versions', { id }); if (!value.draftVersions) throw new Error(t('草稿版本已变化，请刷新后重试')); return value.draftVersions; },
   choose: async (id, version, token, copy) => { await cleanupRequest('choose-draft-version', { id, version, token, copy }); },
-});
+}, t, () => showPage('notes', true));
+versionsView.setConnected(false);
 function closeMenu(restoreFocus = false): void {
   menu.hidden = true; more.setAttribute('aria-expanded', 'false');
   if (restoreFocus) more.focus();
@@ -90,11 +91,14 @@ function dismissOutside(event: Event): void {
 document.addEventListener('pointerdown', dismissOutside, true);
 document.addEventListener('focusin', dismissOutside);
 document.addEventListener('keydown', event => {
-  if (menu.hidden) return;
+  if (menu.hidden) {
+    if (event.key === 'Escape' && currentPage === 'drafts') { event.preventDefault(); showPage('notes', true); }
+    return;
+  }
   if (event.key === 'Escape') { event.preventDefault(); closeMenu(true); }
   else if (event.key === 'Tab') closeMenu(true);
 });
-otherDevices.addEventListener('click', () => { closeMenu(true); void versionsDialog.show(); });
+otherDevices.addEventListener('click', () => showDrafts());
 organize.addEventListener('click', () => { closeMenu(true); showPage('cleanup'); });
 snooze.addEventListener('click', () => {
   snooze.disabled = true;
@@ -112,21 +116,28 @@ const settingsPanel = new WindowSettingsPanel(document.getElementById('settings-
 });
 let currentPage: RecentPage = 'notes';
 let listScroll = 0;
+let draftId: string | undefined;
+function showDrafts(id?: string): void { draftId = id; showPage('drafts'); }
 function showPage(page: RecentPage, notify = false): void {
   closeMenu();
+  const previousPage = currentPage;
   if (currentPage === 'notes') listScroll = results.scrollTop;
   currentPage = page;
-  for (const name of ['notes', 'settings', 'cleanup'] as const) {
+  for (const name of ['notes', 'settings', 'cleanup', 'drafts'] as const) {
     document.getElementById(`${name}-panel`)!.hidden = name !== page;
   }
   document.getElementById('back')!.hidden = page === 'notes';
   document.getElementById('settings')!.setAttribute('aria-pressed', String(page === 'settings'));
-  document.getElementById('title-display')!.textContent = t(page === 'settings' ? '设置' : page === 'cleanup' ? '整理便签' : '速记列表');
+  const title = t({ notes: '速记列表', settings: '设置', cleanup: '整理便签', drafts: draftId ? '恢复本机草稿' : '其他设备草稿' }[page]);
+  document.getElementById('title-display')!.textContent = title;
+  if (page === 'drafts') document.getElementById('drafts-panel')!.setAttribute('aria-label', title);
   status.hidden = page !== 'notes';
   footer.hidden = page !== 'notes';
   if (page === 'notes') results.scrollTop = listScroll;
-  if (page === 'settings') settingsPanel.open(); else if (notify) request('notes');
+  if (page === 'settings') settingsPanel.open(); else if (notify && page === 'notes') request('notes');
   if (page === 'cleanup') cleanupPanel.open(); else cleanupPanel.close();
+  if (page === 'drafts') void versionsView.show(draftId); else versionsView.close();
+  if (page === 'notes' && previousPage === 'drafts') more.focus({ preventScroll: true });
 }
 document.getElementById('settings')!.addEventListener('click', () => { if (currentPage !== 'settings') showPage('settings', true); });
 document.getElementById('back')!.addEventListener('click', () => showPage('notes', true));
@@ -169,7 +180,7 @@ function render(): void {
     if (item.path) {
       const meta = document.createElement('span'); meta.className = 'recent-meta'; meta.textContent = item.path; meta.title = item.path; open.append(meta);
     }
-    open.onclick = () => { if (item.removed) void versionsDialog.show(item.id); else request('open', item.id); };
+    open.onclick = () => { if (item.removed) showDrafts(item.id); else request('open', item.id); };
     const remove = document.createElement('button'); remove.className = 'recent-delete'; remove.textContent = t('删除'); remove.dataset.id = item.id; remove.dataset.action = 'delete';
     remove.setAttribute('aria-label', `${t('删除')} ${item.summary}`); remove.onclick = () => {
       deletingItem = item; deleteOrigin = remove; deleteSummary.textContent = [title, item.bodySummary].filter(Boolean).join('\n'); deleteDialog.showModal(); deleteCancel.focus();
@@ -195,7 +206,7 @@ channel.onmessage = event => {
   lastHeard = Date.now(); connected = true;
   settingsPanel.setConnected(true);
   cleanupPanel.setConnected(true);
-  versionsDialog.setConnected(true);
+  versionsView.setConnected(true);
   more.disabled = otherDevices.disabled = organize.disabled = snooze.disabled = false;
   if (value.settingsChanged) settingsPanel.externalChange();
   const settingsRequest = value.requestId ? settingsRequests.get(value.requestId) : undefined;
@@ -218,6 +229,7 @@ channel.onmessage = event => {
   if (value.items || !wasConnected || completed) render();
   if (value.page) showPage(value.page);
   else if (!wasConnected && currentPage === 'settings') settingsPanel.open();
+  else if (!wasConnected && currentPage === 'drafts') void versionsView.show(draftId);
 };
 for (const action of ['new', 'pin', 'minimize', 'close', 'refresh'] as const) document.getElementById(action)!.addEventListener('click', () => {
   if (action === 'close' && !connected) { window.close(); return; }
@@ -226,9 +238,9 @@ for (const action of ['new', 'pin', 'minimize', 'close', 'refresh'] as const) do
 search.addEventListener('input', render);
 window.addEventListener('focus', () => request('refresh'));
 const timer = setInterval(() => {
-  if (Date.now() - lastHeard > 6000) { connected = false; closeMenu(); more.disabled = otherDevices.disabled = organize.disabled = snooze.disabled = true; if (deleteDialog.open) closeDelete(); settingsPanel.setConnected(false); cleanupPanel.setConnected(false); versionsDialog.setConnected(false); cancelSettingsRequests(); status.textContent = t('与插件失去连接，请重新打开列表。'); render(); }
+  if (Date.now() - lastHeard > 6000) { connected = false; closeMenu(); more.disabled = otherDevices.disabled = organize.disabled = snooze.disabled = true; if (deleteDialog.open) closeDelete(); settingsPanel.setConnected(false); cleanupPanel.setConnected(false); versionsView.setConnected(false); cancelSettingsRequests(); status.textContent = t('与插件失去连接，请重新打开列表。'); render(); }
   request(connected ? 'heartbeat' : 'ready');
 }, 1500);
-window.addEventListener('beforeunload', () => { stopped = true; cleanupPanel.dispose(); versionsDialog.dispose(); clearInterval(timer); for (const timeout of pending.values()) clearTimeout(timeout); cancelSettingsRequests(); channel.close(); });
-showPage(params.get('page') === 'settings' ? 'settings' : params.get('page') === 'cleanup' ? 'cleanup' : 'notes');
+window.addEventListener('beforeunload', () => { stopped = true; cleanupPanel.dispose(); versionsView.dispose(); clearInterval(timer); for (const timeout of pending.values()) clearTimeout(timeout); cancelSettingsRequests(); channel.close(); });
+showPage(params.get('page') === 'settings' ? 'settings' : params.get('page') === 'cleanup' ? 'cleanup' : params.get('page') === 'drafts' ? 'drafts' : 'notes');
 request('ready');

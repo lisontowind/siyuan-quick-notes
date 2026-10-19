@@ -122,7 +122,7 @@ export class QuickNoteWindowManager {
     if (prior?.y !== undefined) geometry.y = prior.y;
     const entry: WindowEntry = { geometry, lastFocus: Date.now(), closing: false, service: undefined as unknown as AutoSaveService };
     entry.service = new AutoSaveService(structuredClone(note), this.repo, this.drafts, () => this.settings().debounceMs,
-      () => this.publish(note.id), () => this.bounds(entry), saved => this.record(saved));
+      () => this.publish(note.id), () => this.bounds(entry), saved => this.record(saved), () => this.settings().autoSaveToSiYuan);
     if (this.sync?.deleted(note.id)) entry.service.markRemoved();
     this.windows.set(note.id, entry);
     const work = (async () => {
@@ -440,6 +440,10 @@ export class QuickNoteWindowManager {
     this.notifyWindowList();
   }
   refresh(): void { for (const id of this.windows.keys()) this.publish(id); }
+  settingsChanged(): void {
+    for (const entry of this.windows.values()) entry.service.settingsChanged();
+    this.refresh();
+  }
   applyDeletions(): void {
     for (const [id, entry] of this.windows) if (this.sync?.deleted(id) && !entry.service.removed) entry.service.markRemoved();
   }

@@ -2,7 +2,7 @@
   "name": "siyuan-quick-notes",
   "author": "Lisontowind",
   "url": "https://github.com/lisontowind/siyuan-quick-notes",
-  "version": "0.1.28",
+  "version": "0.1.29",
   "minAppVersion": "3.8.6",
   "backends": [
     "windows",
@@ -21,7 +21,7 @@
   },
   "description": {
     "default": "Floating notes with Markdown live rendering, image previews, plugin-local saving and optional SiYuan autosync, and a pinnable recent-notes window.",
-    "zh-CN": "快捷键唤起悬浮便签，默认 Markdown 即时渲染，支持图片，默认保存在插件中，手动保存到思源后自动同步，可在独立置顶窗口找回最近速记和本机草稿。"
+    "zh-CN": "快捷键唤起悬浮便签，默认 Markdown 即时渲染，支持图片，可选择默认保存到思源并自动同步，也可保存在插件草稿中，可在独立置顶窗口找回最近速记和本机草稿。"
   },
   "readme": {
     "default": "README_en_US.md",

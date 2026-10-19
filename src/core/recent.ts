@@ -35,7 +35,7 @@ export function recentItems(history: HistoryRecord[], drafts: Draft[], active: N
   }
   return [...items.values()].sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id));
 }
-export type RecentPage = 'notes' | 'settings' | 'cleanup';
+export type RecentPage = 'notes' | 'settings' | 'cleanup' | 'drafts';
 export interface RecentSettingsData { settings: Settings; notebooks: Array<{ id: string; name: string }>; platform: DesktopPlatform; shortcut: string }
 export type RecentAction = 'ready' | 'heartbeat' | 'refresh' | 'open' | 'siyuan' | 'delete' | 'new' | 'pin' | 'minimize' | 'close'
   | 'notes' | 'settings' | 'save-settings' | 'preview-settings' | 'shortcuts' | 'cleanup' | 'cleanup-start' | 'cleanup-cancel' | 'cleanup-snooze' | 'draft-versions' | 'choose-draft-version';

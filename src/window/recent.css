@@ -1,6 +1,6 @@
 #title-display { min-width:0; }
 #settings[aria-pressed=true] { color:var(--accent); background:var(--selection); }
-#notes-panel, #settings-panel, #cleanup-panel { display:flex; flex:1; min-height:0; flex-direction:column; }
+#notes-panel, #settings-panel, #cleanup-panel, #drafts-panel { display:flex; flex:1; min-height:0; flex-direction:column; }
 .settings-form { display:flex; flex-direction:column; flex:1; min-height:0; }
 .settings-body { flex:1; min-height:0; overflow:auto; padding:8px 14px; }
 .settings-fields { padding:0; margin:0; border:0; min-width:0; }
@@ -19,7 +19,8 @@
 .settings-actions button, .recent-search button { display:inline-flex; align-items:center; justify-content:center; min-height:34px; line-height:1.4; text-align:center; white-space:nowrap; }
 .settings-actions button { padding:6px 10px; font-size:12px; border:1px solid var(--line); }
 .settings-actions .settings-save { background:var(--accent); color:var(--paper); border-color:var(--accent); }
-.settings-status { margin:0 0 8px; max-height:60px; overflow:auto; font-size:11px; color:var(--muted); line-height:1.5; }
+.settings-status { margin:0 0 8px; height:3em; overflow:auto; font-size:11px; color:var(--muted); line-height:1.5; }
+.settings-form[aria-busy=true] button:disabled { opacity:1; }
 .settings-status[data-phase=error] { color:#c66045; }
 .settings-status[data-phase=saved] { color:var(--accent); }
 .recent-search { display:flex; gap:6px; padding:10px; border-bottom:1px solid var(--line); }

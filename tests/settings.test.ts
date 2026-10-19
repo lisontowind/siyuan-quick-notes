@@ -8,7 +8,7 @@ vi.mock('siyuan', () => ({ Setting: class {
 } }));
 import { createSettings } from '../src/components/settings';
 import { defaults } from '../src/core/settings';
-import { validateSettingsDraft } from '../src/core/settings';
+import { parseSettings, validateSettingsDraft } from '../src/core/settings';
 import { NoteRepository } from '../src/services/repository';
 import { createNote } from '../src/core/identity';
 import { FakeKernel } from './fake-kernel';
@@ -42,6 +42,16 @@ function setup() {
 }
 
 describe('settings validation and destination preview', () => {
+  it('defaults legacy settings to plugin drafts and persists the automatic SiYuan save switch', async () => {
+    expect(parseSettings({}).autoSaveToSiYuan).toBe(false);
+    expect(parseSettings({ autoSaveToSiYuan: 'true' }).autoSaveToSiYuan).toBe(false);
+    expect(parseSettings({ autoSaveToSiYuan: true }).autoSaveToSiYuan).toBe(true);
+    expect(() => validateSettingsDraft({ ...defaults, autoSaveToSiYuan: 'true' }, [])).toThrow('设置格式无效');
+    const h = setup(), toggle = h.panel.items.find(item => item.title === '默认保存到思源')!.actionElement;
+    expect(toggle.checked).toBe(false); toggle.checked = true; toggle.listeners.get('input')!(); h.panel.options.confirmCallback();
+    await vi.waitFor(() => expect(h.save).toHaveBeenCalled());
+    expect(h.save.mock.calls[0][0].autoSaveToSiYuan).toBe(true);
+  });
   it('validates window settings against available notebooks and rejects malformed payloads before storage', () => {
     expect(validateSettingsDraft({ ...defaults, notebook: 'available' }, ['available']).notebook).toBe('available');
     expect(() => validateSettingsDraft({ ...defaults, notebook: 'closed' }, ['available'])).toThrow('普通笔记本');

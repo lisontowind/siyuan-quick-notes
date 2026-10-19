@@ -34,7 +34,8 @@ export class WindowSettingsPanel {
   }
   setConnected(value: boolean): void {
     const wasConnected = this.connected;
-    this.connected = value; this.fields.disabled = !value || !this.data || this.busy;
+    this.connected = value; this.fields.disabled = !value || !this.data;
+    this.fields.inert = this.busy; this.form.setAttribute('aria-busy', String(this.busy));
     this.save.disabled = !value || !this.data || this.busy; this.reload.disabled = !value || this.busy;
     if (!value) this.showStatus('与插件失去连接，请重新打开列表。', 'error');
     else if (!wasConnected && this.data) this.showStatus(this.dirty ? '有未保存的修改' : '修改后点击保存，返回列表会保留输入。');
@@ -108,6 +109,7 @@ export class WindowSettingsPanel {
     field(windows, 'restoreWindows', '重启后恢复上次打开的窗口', 'checkbox', '未保存草稿始终保留恢复入口。');
     field(windows, 'maxWindows', '最多同时打开的便签', 'number', '调小上限不会关闭已打开的便签。', 1, 50);
     const saving = group('保存与历史');
+    field(saving, 'autoSaveToSiYuan', '默认保存到思源', 'checkbox', '开启后，新建、打开或编辑的非空便签会自动保存到思源，失败时保留本机草稿。跨设备同步需在思源中配置数据同步。');
     field(saving, 'debounceMs', '自动保存防抖（毫秒）', 'number', undefined, 100, 10000);
     field(saving, 'historyLimit', '最近记录展示条数', 'number', '仅限制最近列表展示，不清理正文、副本或草稿。整理便签可查看全部记录。', 1, 200);
     field(saving, 'showSaved', '显示保存成功状态', 'checkbox', '保存失败与冲突始终显示。');
@@ -139,14 +141,28 @@ export class WindowSettingsPanel {
   }
   private async commit(): Promise<void> {
     if (!this.data || !this.connected || this.busy || !this.form.reportValidity()) return;
+    const focused = document.activeElement instanceof HTMLElement && this.form.contains(document.activeElement) ? document.activeElement : undefined;
     try {
-      const settings = this.value(); this.busy = true; this.version++; this.setConnected(this.connected); this.showStatus('正在保存设置…');
+      const settings = this.value(); this.busy = true; this.setConnected(this.connected); this.showStatus('正在保存设置…');
       const response = await this.send('save-settings', settings);
       if (!response.savedSettings) throw new Error(t('设置保存未确认，请重试'));
-      const scroll = this.body.scrollTop;
-      this.apply({ ...this.data, settings: response.savedSettings }); this.body.scrollTop = scroll;
+      // Keep the existing controls, selection, preview and scroll position.
+      // Only write values the host actually normalized.
+      for (const [key, control] of this.controls) {
+        const value = response.savedSettings[key];
+        if (control instanceof HTMLInputElement && control.type === 'checkbox') {
+          if (control.checked !== value) control.checked = !!value;
+        } else if (control.value !== String(value)) control.value = String(value);
+      }
+      if (settings.directory !== response.savedSettings.directory || settings.notebook !== response.savedSettings.notebook) {
+        this.version++; this.previewOutput.textContent = t('保存位置已更改，请重新预览。');
+      }
+      this.data = { ...this.data, settings: response.savedSettings }; this.dirty = false;
       this.showStatus(response.settingsWarning || '速记设置已保存', response.settingsWarning ? 'error' : 'saved');
     } catch (error) { this.showStatus(`${t('设置未保存')}：${error instanceof Error ? t(error.message) : String(error)}`, 'error'); }
-    finally { this.busy = false; this.setConnected(this.connected); }
+    finally {
+      this.busy = false; this.setConnected(this.connected);
+      if (this.connected && focused?.isConnected && !this.form.closest('[hidden]') && document.activeElement === document.body) focused.focus({ preventScroll: true });
+    }
   }
 }

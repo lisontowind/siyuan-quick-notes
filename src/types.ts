@@ -4,7 +4,7 @@ export interface Settings {
   shortcutBehavior: 'new' | 'recent' | 'list'; width: number; height: number;
   alwaysOnTop: boolean; rememberPosition: boolean; restoreWindows: boolean;
   notebook: string; directory: string;
-  debounceMs: number; showSaved: boolean; maxWindows: number; historyLimit: number;
+  autoSaveToSiYuan: boolean; debounceMs: number; showSaved: boolean; maxWindows: number; historyLimit: number;
   cleanupReminder: boolean; cleanupThreshold: number; archiveDays: number;
 }
 export interface Target { notebook: string; path: string }

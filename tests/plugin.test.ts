@@ -170,6 +170,17 @@ describe('plugin settings and stored history integration', () => {
     plugin.manager = { windows: new Map([[note.id, {}]]), siYuan: vi.fn().mockResolvedValue(undefined) };
     await plugin.siYuanRecent(note.id); expect(plugin.manager.siYuan).toHaveBeenCalledWith(note.id);
   });
+  it('automatically saves the fallback editor to SiYuan when enabled', async () => {
+    const { plugin, api } = setup(); plugin.drafts = new MemoryDrafts(); plugin.saveData.mockResolvedValue({ code: 0 });
+    plugin.settingsValue = { ...plugin.settingsValue, autoSaveToSiYuan: true, debounceMs: 100 };
+    plugin.fallback(); const entry = [...plugin.fallbackServices.values()][0] as any;
+    try {
+      entry.input.value = 'automatic fallback input'; entry.input.oninput();
+      await vi.waitFor(() => expect(entry.service.note.siyuanSaved).toBe(true));
+      expect(api.blocks.get(entry.service.note.blockId)?.raw).toContain('automatic fallback input');
+      await plugin.historyWrites.run('history', async () => {});
+    } finally { entry.service.dispose(); }
+  });
   it('uses the same save-first behavior in the fallback editor and syncs later edits', async () => {
     const { plugin, api } = setup(); plugin.drafts = new MemoryDrafts(); plugin.saveData.mockResolvedValue({ code: 0 });
     vi.mocked(openWindow).mockClear(); plugin.fallback();
@@ -189,14 +200,16 @@ describe('plugin settings and stored history integration', () => {
     const note = { ...createNote(), docId: '20261010000000-doc0001', summary: 'synced' };
     const removed = crypto.randomUUID(), markRemoved = vi.fn();
     plugin.shared = { load: vi.fn().mockResolvedValue({ records: [note], deleted: new Set([removed]) }) };
-    plugin.fallbackServices.set({}, { service: { note: { id: removed }, markRemoved } });
-    plugin.manager = { refresh: vi.fn(), applyDeletions: vi.fn() }; plugin.recentWindow = { settingsChanged: vi.fn(), refresh: vi.fn() }; plugin.syncTray = vi.fn();
+    const settingsChanged = vi.fn();
+    plugin.fallbackServices.set({}, { service: { note: { id: removed }, markRemoved, settingsChanged } });
+    plugin.manager = { refresh: vi.fn(), settingsChanged: vi.fn(), applyDeletions: vi.fn() }; plugin.recentWindow = { settingsChanged: vi.fn(), refresh: vi.fn() }; plugin.syncTray = vi.fn();
     const order = [...plugin.toolbarLayout.order].reverse();
     plugin.loadData.mockImplementation(async (name: string) => name === 'settings.json' ? { ...defaults, debounceMs: 1500 } : { order });
     await plugin.onDataChanged(); await plugin.onDataChanged();
     expect(plugin.settingsValue.debounceMs).toBe(1500); expect(plugin.toolbarLayout.order).toEqual(order);
     expect(plugin.historyValue).toBe(history); expect(plugin.historyValue[0].summary).toBe('synced');
     expect(markRemoved).toHaveBeenCalled(); expect(plugin.manager.applyDeletions).toHaveBeenCalled();
+    expect(settingsChanged).toHaveBeenCalledTimes(1); expect(plugin.manager.settingsChanged).toHaveBeenCalledTimes(1);
     expect(plugin.recentWindow.settingsChanged).toHaveBeenCalled(); expect(plugin.saveData).not.toHaveBeenCalled();
   });
   it('persists toolbar separately and retains the last accepted layout on a rejected write', async () => {

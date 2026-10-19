@@ -76,6 +76,8 @@ const english: Record<string, string> = {
   '恢复到思源': 'Restore to SiYuan', '删除便签': 'Delete note',
   '没有可用的插件正文副本，无法恢复。请从思源历史或回收站恢复。': 'No full plugin copy is available. Restore this note from SiYuan history or trash.',
   '保存到思源中': 'Save to SiYuan', '在思源中打开': 'Open in SiYuan', '已保存到插件': 'Saved in plugin',
+  '默认保存到思源': 'Save to SiYuan by default',
+  '开启后，新建、打开或编辑的非空便签会自动保存到思源，失败时保留本机草稿。跨设备同步需在思源中配置数据同步。': 'Automatically save nonempty notes to SiYuan when created, opened or edited. Local drafts are kept if saving fails. Configure SiYuan data sync for access on other devices.',
   '新速记 · 输入后自动保存到插件': 'New note · Autosaves in plugin',
   '首次保存到思源时确定保存位置，修改设置只影响尚未确定位置的便签。': 'The destination is fixed when first saving to SiYuan. Changes affect notes without a destination.',
   '速记内容为空，请输入内容后保存到思源': 'This note is empty. Enter content before saving to SiYuan.',

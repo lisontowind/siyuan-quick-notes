@@ -85,7 +85,7 @@ try {
       }
       if (['cleanup', 'devices'].includes(card.page)) {
         await frame.locator('#more').click(); await frame.locator(card.page === 'cleanup' ? '#organize' : '#other-devices').click();
-        await frame.locator(card.page === 'cleanup' ? '.cleanup-row' : '.draft-versions-dialog textarea').first().waitFor();
+        await frame.locator(card.page === 'cleanup' ? '.cleanup-row' : '.draft-versions-panel textarea').first().waitFor();
         if (card.page === 'devices') await frame.getByRole('button', { name: english ? 'Copy to this device' : '复制到本设备', exact: true }).waitFor();
       }
     }

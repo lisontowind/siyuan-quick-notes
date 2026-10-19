@@ -20,7 +20,7 @@ class Window extends EventEmitter {
   destroy = vi.fn(() => { this.destroyed = true; this.emit('closed'); });
   isDestroyed() { return this.destroyed; }
   setAlwaysOnTop = vi.fn((pinned: boolean) => { this.pinned = pinned; });
-  minimize = vi.fn();
+  minimize = vi.fn(); hide = vi.fn();
 }
 function setup() {
   vi.useFakeTimers(); vi.stubGlobal('BroadcastChannel', Channel);
@@ -102,12 +102,48 @@ describe('recent list data', () => {
   });
 });
 describe('independent recent window', () => {
+  it('initializes after an early ready message and publishes items without advancing the refresh timer', async () => {
+    const h = setup();
+    h.create.mockImplementationOnce(async () => {
+      h.channel.onmessage!({ data: { session: h.controller.session, windowId: 'recent', requestId: 'early', action: 'ready' } });
+      const native = new Window(); h.windows.push(native); return native as unknown as NativeWindow;
+    });
+    await h.controller.show('settings'); await vi.advanceTimersByTimeAsync(0);
+    expect(h.channel.sent.some(value => value.page === 'settings')).toBe(true);
+    expect(h.channel.sent.some(value => value.items)).toBe(true);
+    expect(h.actions.items).toHaveBeenCalledOnce();
+    await h.controller.dispose();
+  });
+  it('delivers and refreshes notes while cleanup statistics are still loading', async () => {
+    const h = setup(); let finish!: (value: any) => void;
+    const cleanup = vi.fn().mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
+      .mockResolvedValue({ items: [], total: 2, unsaved: 2, eligible: 0 });
+    Object.assign(h.actions, { cleanup });
+    await h.controller.show(); await vi.advanceTimersByTimeAsync(0);
+    expect(h.channel.sent.filter(value => value.items)).toHaveLength(1);
+    expect(h.channel.sent.some(value => value.cleanup)).toBe(false);
+    await h.request('refresh');
+    expect(h.channel.sent.filter(value => value.items)).toHaveLength(2);
+    expect(cleanup).toHaveBeenCalledOnce();
+    finish({ items: [], total: 1, unsaved: 1, eligible: 0 }); await vi.advanceTimersByTimeAsync(0);
+    expect(h.channel.sent.filter(value => value.cleanup).at(-1).cleanup.total).toBe(2);
+    await h.controller.dispose();
+  });
+  it('keeps the list available when cleanup statistics fail', async () => {
+    const h = setup(); Object.assign(h.actions, { cleanup: vi.fn().mockRejectedValue(new Error('stats failed')) });
+    await h.controller.show(); await vi.advanceTimersByTimeAsync(0);
+    expect(h.channel.sent.some(value => value.items)).toBe(true);
+    expect(h.channel.sent.some(value => value.error === 'stats failed')).toBe(true);
+    await h.request('open', crypto.randomUUID()); expect(h.actions.open).toHaveBeenCalledOnce();
+    await h.controller.dispose();
+  });
   it('routes foreign read-only previews and copies, rejecting direct continuation requests', async () => {
     const h = setup(), token = crypto.randomUUID(), version = crypto.randomUUID();
     const versions = vi.fn().mockResolvedValue({ token, removed: false, versions: [] });
     const chooseVersion = vi.fn().mockResolvedValue(undefined); Object.assign(h.actions, { versions, chooseVersion });
     await h.controller.show(); await h.request('draft-versions');
     expect(versions).toHaveBeenCalledWith(undefined); expect(h.channel.sent.at(-1).draftVersions.token).toBe(token);
+    await h.request('ready'); expect(h.channel.sent.some(value => value.page === 'drafts')).toBe(true);
     await h.request('choose-draft-version', undefined, { token, version, copy: true });
     expect(chooseVersion).toHaveBeenCalledWith(undefined, version, token, true);
     await h.request('choose-draft-version', undefined, { token, version, copy: false }); expect(chooseVersion).toHaveBeenCalledOnce();
@@ -160,7 +196,7 @@ describe('independent recent window', () => {
     await h.controller.dispose(); expect(h.windows[0].destroy).toHaveBeenCalledOnce(); expect(h.channel.close).toHaveBeenCalledOnce();
   });
   it('coalesces changes, refreshes after open, and ignores forged requests', async () => {
-    const h = setup(); await h.controller.show();
+    const h = setup(); await h.controller.show(); await vi.advanceTimersByTimeAsync(0); h.actions.items.mockClear();
     for (let i = 0; i < 30; i++) h.controller.refresh();
     await vi.advanceTimersByTimeAsync(250); expect(h.actions.items).toHaveBeenCalledOnce();
     await h.request('open', crypto.randomUUID(), { session: 'wrong' }); expect(h.actions.open).not.toHaveBeenCalled();
@@ -175,11 +211,38 @@ describe('independent recent window', () => {
     expect(h.channel.sent.at(-1).error).toBe('disk locked'); expect(h.windows[0].destroy).not.toHaveBeenCalled();
     await h.controller.dispose();
   });
-  it('closes and reopens one list, does not remember when disabled, and destroys a late-created window on unload', async () => {
+  it('hides and reuses the list, skips hidden refreshes, and destroys it on unload', async () => {
     const h = setup(); h.settings.rememberPosition = false; await h.controller.show();
+    await vi.advanceTimersByTimeAsync(0); h.actions.items.mockClear();
     expect(h.store.loadRecentGeometry).not.toHaveBeenCalled();
-    await h.request('close'); expect(h.windows[0].destroy).toHaveBeenCalledOnce(); expect(h.store.saveRecentGeometry).not.toHaveBeenCalled();
-    await h.controller.show(); expect(h.create).toHaveBeenCalledTimes(2); await h.controller.dispose();
+    h.controller.refresh(); await h.request('close');
+    expect(h.windows[0].hide).toHaveBeenCalledOnce(); expect(h.windows[0].destroy).not.toHaveBeenCalled();
+    expect(h.store.saveRecentGeometry).not.toHaveBeenCalled();
+    h.controller.refresh(); await vi.advanceTimersByTimeAsync(1500); expect(h.actions.items).not.toHaveBeenCalled();
+    await h.controller.show(); await vi.advanceTimersByTimeAsync(0);
+    expect(h.create).toHaveBeenCalledOnce(); expect(h.focus).toHaveBeenCalledTimes(2); expect(h.actions.items).toHaveBeenCalledOnce();
+    await h.request('close'); await h.controller.dispose();
+    expect(h.windows[0].destroy).toHaveBeenCalledOnce(); expect(h.guards[0].stop).toHaveBeenCalledOnce();
+  });
+  it('remembers native closure and recreates a window after system destruction', async () => {
+    const h = setup(); await h.controller.show();
+    const event = { preventDefault: vi.fn() }; h.windows[0].emit('close', event);
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(h.store.saveRecentGeometry).toHaveBeenCalledOnce();
+    h.windows[0].destroy(); await h.controller.show(); expect(h.create).toHaveBeenCalledTimes(2);
+    await h.controller.dispose(); expect(h.windows[1].destroy).toHaveBeenCalledOnce();
+  });
+  it('does not publish an old window snapshot to its replacement', async () => {
+    const h = setup(); let finish!: (value: any) => void;
+    h.actions.items.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    await h.controller.show(); await vi.advanceTimersByTimeAsync(0);
+    h.windows[0].destroy(); await h.controller.show();
+    const old = { id: 'old-window' }; finish([old]); await vi.advanceTimersByTimeAsync(250);
+    expect(h.channel.sent.some(value => value.items?.some((item: any) => item.id === old.id))).toBe(false);
+    expect(h.channel.sent.some(value => value.items?.length === 0)).toBe(true);
+    await h.controller.dispose();
+  });
+  it('destroys a late-created window on unload', async () => {
     const late = setup(); let resolve!: (native: NativeWindow) => void;
     late.create.mockImplementation(() => new Promise(ready => { resolve = ready; }));
     const showing = late.controller.show(); await vi.advanceTimersByTimeAsync(0); await late.controller.dispose();

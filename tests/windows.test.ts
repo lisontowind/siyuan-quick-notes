@@ -9,6 +9,7 @@ import type { LocalDraftStore } from '../src/platform/drafts';
 import type { Draft, NoteRecord, Response, Settings, WindowRecoveryState } from '../src/types';
 
 class FakeWindow implements NativeWindow {
+  hide() {}
   callbacks = new Map<string, (...args: any[]) => void>(); destroyed = false; pinned = false; shown = false;
   webContents = { on: vi.fn(), openDevTools: vi.fn() };
   messages = new Map<number, (wParam: Uint8Array, lParam: Uint8Array) => void>();
@@ -149,6 +150,18 @@ function harness(settings: Settings = { ...defaults, debounceMs: 10000 }, initia
     ignoreCollections: () => { acknowledge = false; },
     cleanup: async () => { await manager.dispose(); peer.close(); created.forEach(win => win.destroy()); vi.unstubAllGlobals(); } };
 }
+
+it('applies automatic SiYuan saving to already open drafts when settings change', async () => {
+  const settings = { ...defaults, debounceMs: 100 }, h = harness(settings), note = createNote();
+  try {
+    await h.manager.open(note); const service = h.manager.windows.get(note.id)!.service;
+    await service.edit('open draft', 1, false); expect(h.api.calls).toEqual([]);
+    settings.autoSaveToSiYuan = true; h.manager.settingsChanged();
+    await vi.waitFor(() => expect(service.note.siyuanSaved).toBe(true));
+    expect(h.api.blocks.size).toBe(1); expect(h.values.has(note.id)).toBe(false);
+    expect(h.manager.history.some(item => item.id === note.id)).toBe(true);
+  } finally { await h.cleanup(); }
+});
 
 it.each(['en_US', 'zh_CN'])('passes SiYuan language %s into the isolated note renderer', async lang => {
   const h = harness();

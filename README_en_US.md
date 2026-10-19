@@ -4,11 +4,20 @@
 
 # Quick Notes
 
-Capture an idea without switching back to a document in SiYuan. Press **Ctrl + Alt + N** (**Option + Command + N** on macOS) to open a small floating note for ideas, tasks, or temporary excerpts. New notes autosave in device-specific plugin drafts. After you manually save a note to SiYuan, later edits sync automatically.
+Capture an idea without switching back to a document in SiYuan. Press **Ctrl + Alt + N** (**Option + Command + N** on macOS) to open a small floating note for ideas, tasks, or temporary excerpts. New notes autosave in device-specific plugin drafts. After you manually save a note to SiYuan, later edits sync automatically. Enable **Save to SiYuan by default** in settings to automate the first save too.
 
 Requires **SiYuan desktop 3.8.6 or later on Windows, macOS, or Linux**, with SiYuan running. See the [testing record (Chinese)](docs/testing.md) for the status of native macOS/Linux verification.
 
 **Interface language:** floating notes and the independent recent-notes window, including its embedded settings, follow SiYuan's Chinese or English interface language. Reload the plugin after changing SiYuan's language. The tray menu and fallback panels currently use Chinese; this guide includes their Chinese labels. The operation guides show the real English note and list interfaces.
+
+## What’s new in 0.1.29
+
+- **Save to SiYuan by default:** enable it under Saving and history to automatically save nonempty notes. Plugin drafts remain the default, and failed saves retain local content.
+- **Faster list reopening and refresh:** reuse the list window and load note content independently of organization statistics, preserving search, scroll and settings input.
+- **Stable settings saves:** keep previews, focus and scroll position while saving without rebuilding the form.
+- **Full-page foreign drafts:** preview and copy other devices’ drafts inside the list window, with Back and Escape navigation.
+
+See the [0.1.29 release notes](docs/releases/0.1.29.md). The illustrations below show 0.1.28; the written instructions describe current behavior.
 
 ## What’s new in 0.1.28
 
@@ -32,7 +41,7 @@ Deleting from the list opens confirmation inside that panel and propagates remov
 | --- | --- |
 | Capture a passing thought | A global shortcut opens an independent note; multiple windows, pinning, and remembered positions are supported. |
 | Write text and add images | Markdown live rendering by default, optional source mode, pasted screenshots, image selection and drag-and-drop, with previews of SiYuan image assets. |
-| Save to SiYuan on demand | New notes stay in the plugin. Save to SiYuan manually to enable autosync after 800 ms, with each note in its own native callout. |
+| Save to SiYuan on demand | Enable Save to SiYuan by default, or keep plugin drafts until manually saving. Autosave runs after 800 ms, with each note in its own native callout. |
 | Pick up where you left off | Search recent notes, recover local drafts or copy foreign drafts, and optionally restore previously open windows. |
 
 ## Get started
@@ -149,9 +158,13 @@ Progress includes success, failure and skipped counts. Retry failed notes or sto
 
 ## Where is content saved?
 
-New notes autosave in this device’s plugin drafts. Typing, `Ctrl + S` (`Command + S` on macOS), Save now, and normal close do not create SiYuan content. Nonempty notes remain recoverable after closing and restarting. A new note that has never been saved to SiYuan is removed automatically if it is blank when closed, including whitespace-only content. The lower-right arrow button offers **Save to SiYuan** until the first confirmed save, then changes to **Open in SiYuan**. The same button appears above Delete on each list row. The first click saves without opening a document. Later edits autosync after **800 ms**, on Save now, or on normal close. A note needs either a title or body before its first SiYuan save.
+**Save to SiYuan by default**: enable this under Settings → Saving and history after selecting a notebook and directory. Nonempty drafts that are open, newly created or reopened save automatically after the configured delay (800 ms by default). Save now and normal close also follow this setting. Blank notes create no document; title-only notes can be saved. Failed saves retain a local draft. Turning the switch off keeps unsaved notes as plugin drafts; notes already saved to SiYuan continue autosaving. Closed drafts are saved when reopened.
 
-**“Saved in plugin” confirms persistence on this device; “Saved to SiYuan” confirms a successful SiYuan body save.** Failed first saves retain the plugin body and the save action. Normal close syncs only notes already saved to SiYuan, after confirming the local draft is on disk. If sync fails, the window closes with its local draft retained. If the latest draft has not been confirmed on disk, the window stays open.
+Saved bodies reach other devices through SiYuan data sync. Configure the same sync space on each device and wait for sync to finish. This setting writes notes to SiYuan; it does not configure or trigger cloud synchronization.
+
+With Save to SiYuan by default off, new notes autosave in this device’s plugin drafts. Typing, `Ctrl + S` (`Command + S` on macOS), Save now, and normal close do not create SiYuan content. Nonempty notes remain recoverable after closing and restarting. A new note that has never been saved to SiYuan is removed automatically if it is blank when closed, including whitespace-only content. The lower-right arrow button offers **Save to SiYuan** until the first confirmed save, then changes to **Open in SiYuan**. The same button appears above Delete on each list row. The first click saves without opening a document. Later edits autosync after **800 ms**, on Save now, or on normal close. A note needs either a title or body before its first SiYuan save.
+
+**“Saved in plugin” confirms persistence on this device; “Saved to SiYuan” confirms a successful SiYuan body save.** Failed first saves retain the plugin body and the save action. With this option off, normal close syncs only notes already saved to SiYuan, after confirming the local draft is on disk. If sync fails, the window closes with its local draft retained. If the latest draft has not been confirmed on disk, the window stays open.
 
 The plugin keeps a complete confirmed body copy on this device in `drafts/<device ID>/saved/`. When reopening a note or choosing **Open in SiYuan**, a deleted source offers **Restore to SiYuan**, **Delete note**, or **Cancel**. Restore writes the full plugin copy back; Delete removes the plugin records, draft, and copy. Network or kernel errors do not count as deletion. Older notes whose sources were already deleted without a full local copy cannot be recovered from a summary; use SiYuan history or trash instead.
 

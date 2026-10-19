@@ -5,6 +5,7 @@ export const defaults: Settings = {
   trayClickAction: 'new',
   shortcutBehavior: 'new', width: 320, height: 320, alwaysOnTop: false,
   rememberPosition: true, restoreWindows: false,
+  autoSaveToSiYuan: false,
   notebook: '', directory: '/闪念速记/{{now | date "20060102150405"}}', debounceMs: 800, showSaved: true, maxWindows: 10, historyLimit: 50,
   cleanupReminder: true, cleanupThreshold: 100, archiveDays: 30,
 };
@@ -39,6 +40,7 @@ export function parseSettings(value: unknown): Settings {
     width: number(x.width, 320, 300, 1600), height: number(x.height, 320, 220, 1200),
     alwaysOnTop: bool(x.alwaysOnTop, false), rememberPosition: bool(x.rememberPosition, true),
     restoreWindows: bool(x.restoreWindows, false),
+    autoSaveToSiYuan: bool(x.autoSaveToSiYuan, defaults.autoSaveToSiYuan),
     notebook: typeof x.notebook === 'string' ? x.notebook : '',
     directory,
     debounceMs: number(x.debounceMs, 800, 100, 10000), showSaved: bool(x.showSaved, true), maxWindows: number(x.maxWindows, defaults.maxWindows, 1, 50),

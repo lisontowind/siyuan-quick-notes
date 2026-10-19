@@ -81,6 +81,7 @@ export function createSettings(settings: Settings, notebooks: Notebook[], save: 
   field('alwaysOnTop', '新窗口默认置顶', input('checkbox'));
   field('rememberPosition', '记忆窗口位置、大小与置顶', input('checkbox'));
   field('restoreWindows', '重启后恢复上次打开的窗口', input('checkbox'), '默认关闭；未保存草稿始终保留恢复入口。');
+  field('autoSaveToSiYuan', '默认保存到思源', input('checkbox'), '开启后，新建、打开或编辑的非空便签会自动保存到思源，失败时保留本机草稿。跨设备同步需在思源中配置数据同步。');
   field('debounceMs', '自动保存防抖（毫秒）', input('number', 100, 10000));
   field('maxWindows', '最多同时打开的便签', input('number', 1, 50), '默认 10 个，可设 1–50 个。达到上限后请先关闭一个便签；调小上限不会关闭已打开的便签。');
   field('historyLimit', '最近记录展示条数', input('number', 1, 200), '仅限制最近列表展示，不清理正文、副本或草稿。整理便签可查看全部记录。');

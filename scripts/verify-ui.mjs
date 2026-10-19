@@ -302,9 +302,9 @@ try {
   await page.addInitScript(() => {
     window.__requests = [];
     window.__settings = { trayEnabled: true, trayClickAction: 'new', shortcutBehavior: 'new', width: 320, height: 320,
-      alwaysOnTop: false, rememberPosition: true, restoreWindows: false, notebook: 'book', directory: '/Original', debounceMs: 800, showSaved: true, maxWindows: 10, historyLimit: 50,
+      alwaysOnTop: false, rememberPosition: true, restoreWindows: false, autoSaveToSiYuan: false, notebook: 'book', directory: '/Original', debounceMs: 800, showSaved: true, maxWindows: 10, historyLimit: 50,
       cleanupReminder: true, cleanupThreshold: 100, archiveDays: 30 };
-    window.__failSettings = false; window.__previewDelay = 0;
+    window.__failSettings = false; window.__previewDelay = 0; window.__holdCleanup = true;
     window.BroadcastChannel = class {
       constructor() { window.__channel = this; }
       send(extra) { this.onmessage?.({ data: { session: 'ui', windowId: 'recent', dark: false, pinned: false, ...extra } }); }
@@ -312,8 +312,11 @@ try {
         if (request.action === 'settings') { this.send({ requestId: request.requestId, settingsData: { settings: window.__settings, notebooks: [{ id: 'book', name: '测试笔记本 <script>' }], platform: 'windows', shortcut: 'Ctrl + Alt + N' } }); return; }
         if (request.action === 'preview-settings') { setTimeout(() => this.send({ requestId: request.requestId, preview: { notebook: request.settings.notebook, path: request.settings.directory } }), window.__previewDelay); return; }
         if (request.action === 'save-settings') {
-          if (window.__failSettings) this.send({ requestId: request.requestId, error: 'disk locked' });
-          else { window.__settings = request.settings; this.send({ requestId: request.requestId, savedSettings: window.__settings }); }
+          const finish = () => {
+            if (window.__failSettings) this.send({ requestId: request.requestId, error: 'disk locked' });
+            else { window.__settings = request.settings; this.send({ requestId: request.requestId, savedSettings: window.__settings }); }
+          };
+          if (window.__holdSettingsSave) window.__finishSettingsSave = finish; else finish();
           return;
         }
         const items = window.__items ??= Array.from({ length: 30 }, (_, i) => ({ id: `00000000-0000-0000-0000-${String(i).padStart(12, '0')}`, summary: `测试速记 ${i} <script>`, title: `示例标题 ${i}`, bodySummary: `测试速记 ${i} <script>`, calloutType: i === 5 ? undefined : ['NOTE', 'TIP', 'IMPORTANT', 'WARNING', 'CAUTION'][i % 5], path: i % 2 ? '/速记/2026-10-19' : '', updatedAt: 1792339200000 - i * 1000, draft: i % 2 === 0, siyuanSaved: i % 2 !== 0, open: i === 0 }));
@@ -322,11 +325,16 @@ try {
           reminderActive: window.__settings.cleanupReminder && items.length >= window.__settings.cleanupThreshold && !window.__cleanupSnoozed, progress: window.__cleanupProgress };
         if (request.action === 'cleanup-snooze') { window.__cleanupSnoozed = true; this.send({ requestId: request.requestId }); return; }
         if (request.action === 'draft-versions') {
-          this.send({ requestId: request.requestId, draftVersions: { token: '90000000-0000-0000-0000-000000000001', removed: false,
+          const finish = () => this.send({ requestId: request.requestId, draftVersions: { token: '90000000-0000-0000-0000-000000000001', removed: false,
             versions: [{ version: '80000000-0000-0000-0000-000000000001', device: 'a0000000-0000-0000-0000-000000000001', summary: '版本 A <script>', text: '# 版本 A\n\n保留设备 A 的正文 <script>', updatedAt: Date.now() },
-              { version: '80000000-0000-0000-0000-000000000002', device: 'b0000000-0000-0000-0000-000000000002', summary: '版本 B', text: '# 版本 B\n\n保留设备 B 的修改', updatedAt: Date.now() }] } }); return;
+              { version: '80000000-0000-0000-0000-000000000002', device: 'b0000000-0000-0000-0000-000000000002', summary: '版本 B', text: '# 版本 B\n\n保留设备 B 的修改', updatedAt: Date.now() }] } });
+          if (window.__holdDraftLoad) window.__finishDraftLoad = finish; else finish(); return;
         }
-        if (request.action === 'choose-draft-version') { window.__versionChoice = request; this.send({ requestId: request.requestId }); return; }
+        if (request.action === 'choose-draft-version') {
+          window.__versionChoice = request;
+          const finish = () => this.send({ requestId: request.requestId });
+          if (window.__holdDraftCopy) window.__finishDraftCopy = finish; else finish(); return;
+        }
         if (request.action === 'cleanup') { this.send({ requestId: request.requestId, cleanup }); return; }
         if (request.action === 'cleanup-start') {
           window.__cleanupProgress = { jobId: 'job', mode: request.mode, running: false, cancelled: false, total: request.selections.length, completed: request.selections.length, succeeded: request.selections.length, skipped: 0, failures: [] };
@@ -339,12 +347,21 @@ try {
           else { item.siyuanSaved = true; item.path = '/速记/2026-10-19'; }
           this.send({ requestId: request.requestId, items }); return;
         }
-        this.send({ requestId: request.requestId, ...(['ready', 'refresh'].includes(request.action) ? { items, cleanup } : {}) });
+        this.send({ requestId: request.requestId, ...(['ready', 'refresh'].includes(request.action) ? { items } : {}) });
+        if (['ready', 'refresh'].includes(request.action)) {
+          if (window.__holdCleanup) window.__pendingCleanup = cleanup;
+          else this.send({ cleanup });
+        }
       }, 0); }
       close() {}
     };
   });
   await page.goto(`${origin}/plugins/siyuan-quick-notes/recent.html?session=ui&channel=siyuan-quick-notes:recent:ui`);
+  await page.locator('.recent-row').first().waitFor();
+  assert.equal(await page.locator('.recent-row').count(), 30);
+  assert.equal(await page.locator('#cleanup-summary').innerText(), '');
+  await page.evaluate(() => { window.__holdCleanup = false; window.__channel.send({ cleanup: window.__pendingCleanup }); });
+  await page.waitForFunction(() => document.getElementById('cleanup-summary').textContent.includes('全部未归档 30'));
   await page.locator('.recent-row').first().waitFor(); assert.equal(await page.locator('.recent-row').count(), 30);
   assert.equal(await page.locator('.recent-item strong').first().innerText(), '示例标题 0');
   assert.equal(await page.locator('.recent-body').first().innerText(), '测试速记 0 <script>');
@@ -446,7 +463,9 @@ try {
   const notesScroll = await page.locator('#results').evaluate(element => element.scrollTop);
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.locator('#setting-directory').waitFor();
-  assert.equal(await page.locator('#settings-panel input, #settings-panel select').count(), 17);
+  assert.equal(await page.locator('#settings-panel input, #settings-panel select').count(), 18);
+  assert.equal(await page.locator('#setting-autoSaveToSiYuan').isChecked(), false);
+  await page.locator('#setting-autoSaveToSiYuan').check();
   await page.locator('#setting-trayClickAction').selectOption('recent'); await page.locator('#setting-directory').fill('/Draft');
   await page.evaluate(() => window.__channel.send({ settingsChanged: true }));
   assert.equal(await page.locator('#setting-directory').inputValue(), '/Draft');
@@ -466,10 +485,60 @@ try {
   await page.getByRole('button', { name: '保存设置', exact: true }).click(); await page.waitForTimeout(100);
   assert((await page.locator('.settings-status').innerText()).includes('disk locked')); assert.equal(await page.locator('#setting-directory').inputValue(), '/Accepted');
   assert.equal(await page.evaluate(() => window.__settings.directory), '/Original');
-  await page.evaluate(() => { window.__failSettings = false; }); await page.getByRole('button', { name: '保存设置', exact: true }).click(); await page.waitForTimeout(100);
+  await page.locator('#setting-directory').fill('  /Accepted  ');
+  await page.getByRole('button', { name: '预览保存位置', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('.settings-preview-output').textContent.includes(' · /Accepted'));
+  const savedPreview = await page.locator('.settings-preview-output').innerText();
+  await page.locator('#setting-archiveDays').focus();
+  async function settingsLayout() {
+    return page.evaluate(() => ({ scroll: document.querySelector('.settings-body').scrollTop,
+      height: document.querySelector('.settings-body').clientHeight,
+      fieldsHeight: document.querySelector('.settings-fields').getBoundingClientRect().height,
+      statusHeight: document.querySelector('.settings-status').getBoundingClientRect().height,
+      saveOpacity: getComputedStyle(document.querySelector('.settings-save')).opacity,
+      inputColor: getComputedStyle(document.querySelector('#setting-archiveDays')).color }));
+  }
+  const beforeSave = await settingsLayout(); assert(beforeSave.scroll > 0);
+  await page.evaluate(() => {
+    window.__failSettings = false; window.__holdSettingsSave = true;
+    window.__settingsControls = [...document.querySelectorAll('.settings-fields input, .settings-fields select')];
+    window.__settingsRebuilds = 0;
+    new MutationObserver(records => { window.__settingsRebuilds += records.length; }).observe(document.querySelector('.settings-fields'), { childList: true, subtree: true });
+    document.querySelector('.settings-form').requestSubmit();
+  });
+  await page.waitForFunction(() => !!window.__finishSettingsSave);
+  assert.deepEqual(await settingsLayout(), beforeSave);
+  assert(await page.locator('.settings-fields').evaluate(element => element.inert));
+  assert(await page.locator('.settings-save').isDisabled());
+  const saveRequests = await page.evaluate(() => window.__requests.filter(r => r.action === 'save-settings').length);
+  await page.evaluate(() => { document.querySelector('.settings-form').requestSubmit(); });
+  assert.equal(await page.evaluate(() => window.__requests.filter(r => r.action === 'save-settings').length), saveRequests);
+  await page.evaluate(() => { window.__holdSettingsSave = false; window.__finishSettingsSave(); });
+  await page.waitForFunction(() => document.querySelector('.settings-status').textContent === '速记设置已保存');
+  assert.equal(await page.evaluate(() => window.__settings.autoSaveToSiYuan), true);
+  assert.equal(await page.locator('#setting-autoSaveToSiYuan').isChecked(), true);
+  assert.deepEqual(await settingsLayout(), beforeSave);
+  assert.equal(await page.locator('#setting-directory').inputValue(), '/Accepted');
+  assert.equal(await page.locator('.settings-preview-output').innerText(), savedPreview);
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'setting-archiveDays');
+  assert(await page.evaluate(() => [...document.querySelectorAll('.settings-fields input, .settings-fields select')].every((element, i) => element === window.__settingsControls[i])));
+  assert.equal(await page.evaluate(() => window.__settingsRebuilds), 0);
+  assert.equal(await page.locator('.settings-form').getAttribute('aria-busy'), 'false');
+  await page.evaluate(() => {
+    const input = document.querySelector('#setting-directory'); input.focus({ preventScroll: true }); input.setSelectionRange(2, 6);
+    document.querySelector('.settings-form').requestSubmit();
+  });
+  await page.waitForFunction(() => document.querySelector('.settings-form').getAttribute('aria-busy') === 'false');
+  assert.deepEqual(await settingsLayout(), beforeSave);
+  assert.deepEqual(await page.locator('#setting-directory').evaluate(input => [document.activeElement === input, input.selectionStart, input.selectionEnd]), [true, 2, 6]);
   assert.equal(await page.locator('.settings-status').innerText(), '速记设置已保存'); assert.equal(await page.evaluate(() => window.__settings.trayClickAction), 'recent');
   await page.screenshot({ path: resolve(output, 'settings.png') });
   await page.evaluate(() => window.__channel.send({ dark: true })); await page.screenshot({ path: resolve(output, 'settings-dark.png') });
+  await page.locator('#setting-autoSaveToSiYuan').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: resolve(output, 'settings-auto-save-dark.png') });
+  await page.evaluate(() => window.__channel.send({ dark: false }));
+  await page.screenshot({ path: resolve(output, 'settings-auto-save-light.png') });
+  await page.evaluate(() => window.__channel.send({ dark: true }));
   await page.getByRole('button', { name: '返回速记列表', exact: true }).click();
   await page.locator('#more').click(); await page.getByRole('menuitem', { name: '整理便签', exact: true }).click();
   await page.locator('.cleanup-row').first().waitFor();
@@ -514,24 +583,65 @@ try {
   await page.evaluate(() => window.__channel.send({ error: 'disk locked' })); assert.equal(await page.locator('#recent-status').innerText(), 'disk locked');
   await page.evaluate(() => window.__channel.send({ items: [] })); assert.equal(await page.locator('#recent-status').innerText(), 'disk locked');
   assert((await page.locator('#cleanup-summary').innerText()).includes('全部未归档 30'));
-  await page.locator('#search').fill('');
+  await page.locator('#search').fill('测试速记 2');
+  const beforeDraftScroll = await page.locator('#results').evaluate(element => element.scrollTop);
   await page.locator('#more').click(); await page.getByRole('menuitem', { name: '其他设备草稿', exact: true }).click();
-  await page.locator('.draft-versions-dialog textarea').waitFor();
-  await page.waitForFunction(() => document.querySelector('.draft-versions-dialog textarea').value.includes('版本 A'));
-  assert((await page.locator('.draft-versions-dialog textarea').inputValue()).includes('<script>'));
-  assert.equal(await page.locator('.draft-versions-dialog textarea').getAttribute('readonly'), '');
+  await page.locator('.draft-versions-panel textarea').waitFor();
+  await page.waitForFunction(() => document.querySelector('.draft-versions-panel textarea').value.includes('版本 A'));
+  assert.equal(await page.locator('#title-display').innerText(), '其他设备草稿');
+  assert.equal(await page.locator('#notes-panel').isVisible(), false);
+  assert.equal(await page.locator('#recent-footer').isVisible(), false);
+  assert.equal(await page.locator('dialog[open]').count(), 0);
+  async function checkDraftPageLayout() {
+    const layout = await page.evaluate(() => {
+      const panel = document.querySelector('.draft-versions-panel'), rect = panel.getBoundingClientRect();
+      const section = document.querySelector('#drafts-panel').getBoundingClientRect(), header = document.querySelector('header').getBoundingClientRect();
+      const copy = panel.querySelector('.draft-version-actions button:last-child').getBoundingClientRect();
+      return { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right, sectionTop: section.top, sectionBottom: section.bottom,
+        headerBottom: header.bottom, width: innerWidth, height: innerHeight, overflow: panel.scrollWidth > panel.clientWidth,
+        copyBottom: copy.bottom, copyRight: copy.right, previewHeight: panel.querySelector('textarea').getBoundingClientRect().height };
+    });
+    assert.equal(layout.top, layout.headerBottom); assert.equal(layout.top, layout.sectionTop); assert.equal(layout.bottom, layout.sectionBottom);
+    assert(layout.left <= 1 && layout.right >= layout.width - 1 && layout.bottom >= layout.height - 1);
+    assert(!layout.overflow && layout.copyBottom <= layout.bottom && layout.copyRight <= layout.right && layout.previewHeight >= 64);
+  }
+  await checkDraftPageLayout();
+  assert((await page.locator('.draft-versions-panel textarea').inputValue()).includes('<script>'));
+  assert.equal(await page.locator('.draft-versions-panel textarea').getAttribute('readonly'), '');
   assert.equal(await page.getByRole('button', { name: '继续此版本', exact: true }).count(), 0);
   await page.getByRole('combobox', { name: '选择草稿', exact: true }).selectOption('80000000-0000-0000-0000-000000000002');
-  assert((await page.locator('.draft-versions-dialog textarea').inputValue()).includes('设备 B 的修改'));
+  assert((await page.locator('.draft-versions-panel textarea').inputValue()).includes('设备 B 的修改'));
   await page.screenshot({ path: resolve(output, 'draft-versions.png') });
   await page.keyboard.press('Escape');
+  assert.equal(await page.locator('#title-display').innerText(), '速记列表');
+  assert.equal(await page.locator('#notes-panel').isVisible(), true);
+  assert.equal(await page.locator('#search').inputValue(), '测试速记 2');
+  assert.equal(await page.locator('#results').evaluate(element => element.scrollTop), beforeDraftScroll);
   assert.equal(await page.evaluate(() => window.__requests.filter(request => request.action === 'choose-draft-version').length), 0);
-  await page.locator('#more').click(); await page.locator('#other-devices').click(); await page.locator('.draft-versions-dialog textarea').waitFor();
+  await page.locator('#more').click(); await page.locator('#other-devices').click(); await page.locator('.draft-versions-panel textarea').waitFor();
   await page.getByRole('button', { name: '复制到本设备', exact: true }).click(); await page.waitForTimeout(100);
   assert.equal(await page.evaluate(() => window.__versionChoice.copy), true);
   assert.equal(await page.evaluate(() => window.__versionChoice.id), undefined);
   assert.equal(await page.evaluate(() => window.__versionChoice.token), '90000000-0000-0000-0000-000000000001');
-  assert.equal(await page.locator('.draft-versions-dialog').isVisible(), false);
+  assert.equal(await page.locator('.draft-versions-panel').isVisible(), false);
+  assert.equal(await page.locator('#notes-panel').isVisible(), true);
+  await page.evaluate(() => { window.__holdDraftLoad = true; });
+  await page.locator('#more').click(); await page.locator('#other-devices').click();
+  await page.waitForFunction(() => !!window.__finishDraftLoad);
+  await page.locator('#back').click();
+  await page.evaluate(() => { window.__holdDraftLoad = false; window.__finishDraftLoad(); });
+  assert.equal(await page.locator('#notes-panel').isVisible(), true);
+  await page.evaluate(() => { window.__holdDraftCopy = true; });
+  await page.locator('#more').click(); await page.locator('#other-devices').click();
+  await page.getByRole('button', { name: '复制到本设备', exact: true }).click();
+  await page.waitForFunction(() => !!window.__finishDraftCopy);
+  await page.locator('#back').click();
+  await page.locator('#more').click(); await page.locator('#other-devices').click();
+  await page.waitForFunction(() => !document.querySelector('.draft-version-actions button:last-child').disabled);
+  await page.evaluate(() => { window.__holdDraftCopy = false; window.__finishDraftCopy(); });
+  await page.waitForTimeout(50);
+  assert.equal(await page.locator('#drafts-panel').isVisible(), true);
+  await page.locator('#back').click();
   await page.goto(`${origin}/plugins/siyuan-quick-notes/recent.html?session=ui&channel=siyuan-quick-notes:recent:ui&lang=en-US`);
   await page.locator('.recent-row').first().waitFor();
   assert.equal(await page.locator('#search').getAttribute('placeholder'), 'Search summary, path, or time');
@@ -554,14 +664,14 @@ try {
   assert((await page.locator('.cleanup-row').first().innerText()).includes('测试速记 0 <script>'));
   await page.screenshot({ path: resolve(output, 'cleanup-english.png') });
   await page.getByRole('button', { name: 'Back to note list', exact: true }).click();
-  await page.locator('#more').click(); await page.locator('#other-devices').click(); await page.locator('.draft-versions-dialog textarea').waitFor();
+  await page.locator('#more').click(); await page.locator('#other-devices').click(); await page.locator('.draft-versions-panel textarea').waitFor();
   assert.equal(await page.getByRole('button', { name: 'Copy to this device', exact: true }).count(), 1);
   assert.equal(await page.getByRole('button', { name: 'Continue this version and keep the others', exact: true }).count(), 0);
   await page.setViewportSize({ width: 320, height: 400 });
-  assert(await page.locator('.draft-versions-dialog').evaluate(element => element.getBoundingClientRect().right <= innerWidth && element.scrollWidth <= element.clientWidth));
+  await checkDraftPageLayout();
   await page.screenshot({ path: resolve(output, 'draft-versions-english-narrow.png') }); await page.keyboard.press('Escape');
   assert.deepEqual(errors, []);
-  await writeFile(resolve(output, 'result.json'), JSON.stringify({ result: 'PASS', checks: ['new note and SiYuan save/open actions live in the lower-right footer, preserving behavior and fitting the narrow window without overlap', 'footer buttons share active fill, icon color, radius and border, with consistent keyboard focus in light and dark narrow windows', 'list rows follow all five note palettes in light and dark themes, old notes default to NOTE, refreshed category changes update color', 'five native callout choices, immediate colors, unchanged body, keyboard dismissal and bilingual narrow menus', 'single-click pencil dialog outside the native drag region, unchanged system menu, cancel, save, clear, F2, menu alternative and unchanged body', 'live Markdown', 'cross-paragraph source copy', 'link click keeps rendering without navigation', '320x320 note layout', 'table clicks keep rendering', 'task toggle and undo', 'mode switch without edits', 'Chinese IME', 'image upload', 'snapshot freeze and resume', 'dark theme', '3000-section scrolling', 'list search', 'list refresh preserves scroll', 'open retains list', 'persistent inline errors', 'English list preserves note text', 'embedded settings with all 17 fields', 'settings icon and back preserve drafts and list scroll', 'stale settings preview ignored', 'invalid path blocks settings save', 'failed settings save preserves form', 'settings save acknowledgement', 'bilingual settings', 'organization selection, explicit unsaved discard, cancellation, progress, snooze, narrow layout and English', 'floating note reminder with snooze preserves content', 'top-right More menu entries, keyboard navigation, Escape, outside dismissal and narrow bilingual layout', 'read-only other-device draft preview, selection and copy-only action', 'footer controls remain visible', 'single-line toolbar overflow at 320px, pointer sorting, hidden item keyboard sorting, rollback, persistence and external layout updates', 'selected text formatting', 'empty format insertion and Chinese text', 'hidden boundary backspace', 'link address input', 'matching window control alignment, local delete cancel and confirm, external settings preserve drafts'], errors }, null, 2));
+  await writeFile(resolve(output, 'result.json'), JSON.stringify({ result: 'PASS', checks: ['new note and SiYuan save/open actions live in the lower-right footer, preserving behavior and fitting the narrow window without overlap', 'footer buttons share active fill, icon color, radius and border, with consistent keyboard focus in light and dark narrow windows', 'list rows follow all five note palettes in light and dark themes, old notes default to NOTE, refreshed category changes update color', 'five native callout choices, immediate colors, unchanged body, keyboard dismissal and bilingual narrow menus', 'single-click pencil dialog outside the native drag region, unchanged system menu, cancel, save, clear, F2, menu alternative and unchanged body', 'live Markdown', 'cross-paragraph source copy', 'link click keeps rendering without navigation', '320x320 note layout', 'table clicks keep rendering', 'task toggle and undo', 'mode switch without edits', 'Chinese IME', 'image upload', 'snapshot freeze and resume', 'dark theme', '3000-section scrolling', 'list search', 'list refresh preserves scroll', 'open retains list', 'persistent inline errors', 'English list preserves note text', 'embedded settings with all 18 fields, automatic SiYuan save toggle defaults off and persists after acknowledgement', 'settings icon and back preserve drafts and list scroll', 'stale settings preview ignored', 'invalid path blocks settings save', 'failed settings save preserves form', 'settings save acknowledgement', 'bilingual settings', 'organization selection, explicit unsaved discard, cancellation, progress, snooze, narrow layout and English', 'floating note reminder with snooze preserves content', 'top-right More menu entries, keyboard navigation, Escape, outside dismissal and narrow bilingual layout', 'read-only other-device draft preview, selection and copy-only action', 'footer controls remain visible', 'single-line toolbar overflow at 320px, pointer sorting, hidden item keyboard sorting, rollback, persistence and external layout updates', 'selected text formatting', 'empty format insertion and Chinese text', 'hidden boundary backspace', 'link address input', 'matching window control alignment, local delete cancel and confirm, external settings preserve drafts'], errors }, null, 2));
   console.log('Browser UI checks PASS; screenshots and results: artifacts/ui/');
 } catch (error) {
   if (page && !page.isClosed()) await page.screenshot({ path: resolve(output, 'failure.png'), fullPage: true }).catch(() => {});

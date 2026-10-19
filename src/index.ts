@@ -31,7 +31,7 @@ import { parseToolbarLayout, type ToolbarLayout } from './core/toolbar';
 import { CleanupService } from './services/cleanup';
 import { CleanupPanel } from './window/cleanup-panel';
 import { icon } from './window/icons';
-import { DraftVersionsDialog } from './window/draft-versions';
+import { DraftVersionsPanel } from './window/draft-versions';
 import type { DraftVersionsData } from './core/recent';
 import './styles/cleanup.css';
 
@@ -116,7 +116,9 @@ export default class QuickNotesPlugin extends Plugin {
       const next = parseSettings(settings), changed = JSON.stringify(next) !== JSON.stringify(this.settingsValue);
       this.settingsValue = next; this.toolbarLayout = parseToolbarLayout(layout);
       await this.refreshShared();
-      this.manager?.refresh(); this.syncTray();
+      if (changed) this.manager?.settingsChanged(); else this.manager?.refresh();
+      if (changed) for (const entry of this.fallbackServices.values()) entry.service.settingsChanged();
+      this.syncTray();
       if (changed) this.recentWindow?.settingsChanged(); else this.recentWindow?.refresh();
     });
   }
@@ -349,7 +351,9 @@ export default class QuickNotesPlugin extends Plugin {
       await this.writeData('settings.json', settings);
       if (this.disposed || this.unloading) throw new Error('插件已停用，设置将在重新加载后生效');
       this.settingsValue = settings;
-      this.manager?.refresh(); this.syncTray();
+      this.manager?.settingsChanged();
+      for (const entry of this.fallbackServices.values()) entry.service.settingsChanged();
+      this.syncTray();
       let warning: string | undefined;
       if (this.historyValue.length > settings.historyLimit) {
         this.historyValue.splice(settings.historyLimit);
@@ -547,9 +551,9 @@ export default class QuickNotesPlugin extends Plugin {
     } finally { this.siYuanActions.delete(key); this.changed(); }
   }
   private async showDraftVersions(id?: string): Promise<void> {
-    let panel: DraftVersionsDialog | undefined;
+    let panel: DraftVersionsPanel | undefined;
     const dialog = this.dialog(translate(id ? '恢复本机草稿' : '其他设备草稿', hostLocale()), '<div class="qn-versions-host"></div>', false, () => panel?.dispose());
-    panel = new DraftVersionsDialog(dialog.element.querySelector('.qn-versions-host')!, {
+    panel = new DraftVersionsPanel(dialog.element.querySelector('.qn-versions-host')!, {
       load: value => this.draftVersions(value), choose: async (...args) => { await this.chooseDraftVersion(...args); dialog.destroy(); },
     }, value => translate(value, hostLocale()), () => dialog.destroy());
     await panel.show(id);
@@ -665,7 +669,7 @@ export default class QuickNotesPlugin extends Plugin {
       this.report('已达到窗口数量上限，请先关闭一个窗口'); return;
     }
     const note = existing ? migrateNoteTitle(structuredClone(existing)) : createNote();
-    const dialog = this.dialog('降级模式：速记', '<div class="qn-fallback"><div class="qn-note-heading-row"><div class="qn-note-heading" data-note-heading></div><button type="button" class="qn-edit-title" data-edit-title aria-haspopup="dialog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m16 3 5 5-12 12-6 1 1-6Z"/><path d="m14 5 5 5M4 15l5 5"/></svg></button></div><p>输入后自动保存在本设备。其他设备草稿可从列表查看，复制到本设备后编辑。手动保存到思源成功后，后续修改自动同步。</p><textarea class="b3-text-field" placeholder="Markdown 速记"></textarea><button class="b3-button">保存到思源中</button> <button class="b3-button b3-button--outline" data-keep-draft>保存到插件并关闭</button> <button class="b3-button b3-button--outline" data-insert-image>插入图片…</button><input type="file" multiple hidden data-image-picker><button class="b3-button b3-button--outline qn-callout-select" data-callout-select></button><p role="status"></p></div>', true);
+    const dialog = this.dialog('降级模式：速记', '<div class="qn-fallback"><div class="qn-note-heading-row"><div class="qn-note-heading" data-note-heading></div><button type="button" class="qn-edit-title" data-edit-title aria-haspopup="dialog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m16 3 5 5-12 12-6 1 1-6Z"/><path d="m14 5 5 5M4 15l5 5"/></svg></button></div><p>输入后自动保存在本设备。开启“默认保存到思源”后，非空便签自动保存到思源；也可手动保存。其他设备草稿可从列表查看，复制到本设备后编辑。跨设备同步需配置思源数据同步。</p><textarea class="b3-text-field" placeholder="Markdown 速记"></textarea><button class="b3-button">保存到思源中</button> <button class="b3-button b3-button--outline" data-keep-draft>保存到插件并关闭</button> <button class="b3-button b3-button--outline" data-insert-image>插入图片…</button><input type="file" multiple hidden data-image-picker><button class="b3-button b3-button--outline qn-callout-select" data-callout-select></button><p role="status"></p></div>', true);
     const input = dialog.element.querySelector('textarea')!; input.value = note.text;
     const surface = dialog.element.querySelector('.qn-fallback') as HTMLElement, calloutSelect = dialog.element.querySelector('[data-callout-select]') as HTMLButtonElement;
     const applyKind = (kind = service?.note.calloutType ?? note.calloutType ?? 'NOTE') => { surface.dataset.noteKind = kind; calloutSelect.textContent = kind; calloutSelect.title = translate('提示块类别', hostLocale()); };
@@ -689,7 +693,7 @@ export default class QuickNotesPlugin extends Plugin {
         status.textContent = service.error || (service.phase === 'saved' ? '已保存到思源' : service.phase === 'local' ? '已保存到插件' : '');
       },
       () => ({ width: this.settingsValue.width, height: this.settingsValue.height, pinned: this.settingsValue.alwaysOnTop }),
-      saved => this.recordFallback(saved));
+      saved => this.recordFallback(saved), () => this.settingsValue.autoSaveToSiYuan);
     applyKind();
     if (this.deleted.has(note.id)) service.markRemoved();
     calloutSelect.onclick = () => {

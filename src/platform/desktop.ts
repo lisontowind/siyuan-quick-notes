@@ -4,7 +4,7 @@ import { message } from '../services/autosave';
 export interface NativeWindow {
   on(name: string, callback: (...args: any[]) => void): void;
   removeAllListeners(name?: string): void;
-  loadURL(url: string): Promise<void>; show(): void; focus(): void; restore(): void;
+  loadURL(url: string): Promise<void>; show(): void; hide(): void; focus(): void; restore(): void;
   minimize(): void; isMinimized(): boolean; isDestroyed(): boolean; destroy(): void;
   setAlwaysOnTop(value: boolean): void; isAlwaysOnTop(): boolean;
   getBounds(): { x: number; y: number; width: number; height: number };

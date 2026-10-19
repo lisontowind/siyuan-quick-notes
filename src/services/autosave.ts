@@ -28,10 +28,18 @@ export class AutoSaveService {
   private waiters: Array<{ generation: number; resolve: (safe: boolean) => void }> = [];
   constructor(public note: NoteRecord, private repo: NoteRepository, private drafts: DraftStore,
     private delay: () => number, private notify: () => void, private geometry: () => Geometry,
-    private saved: (note: NoteRecord) => void = () => {}) {
+    private saved: (note: NoteRecord) => void = () => {}, private autoSaveToSiYuan: () => boolean = () => false) {
     this.note = { ...migrateNoteTitle(note), calloutType: note.calloutType ?? 'NOTE', siyuanSaved: isSavedToSiYuan(note) };
     this.phase = isSavedToSiYuan(note) ? note.revision > note.savedRevision ? 'dirty' : 'saved' : note.revision ? 'local' : 'empty';
+    this.settingsChanged();
   }
+  settingsChanged(): void {
+    if (this.disposed || this.deleting || this.paused || this.phase === 'conflict'
+      || isSavedToSiYuan(this.note) || !this.autoSaveToSiYuan() || !this.hasContent()) return;
+    this.pauseTimer();
+    this.timer = setTimeout(() => { void this.flush(); }, this.delay());
+  }
+  private hasContent(): boolean { return !!(this.note.text.trim() || this.note.caption?.trim()); }
   edit(text: string, revision: number, schedule = true, title = this.note.title ?? '', caption = this.note.caption ?? '', calloutType = this.note.calloutType ?? 'NOTE'): Promise<void> {
     if (this.disposed || this.deleting || !Number.isSafeInteger(revision) || revision <= this.note.revision) return Promise.resolve();
     if (!validNoteTitle(caption)) return Promise.reject(new Error('便签标题须为不超过 200 字符的单行文本'));
@@ -99,7 +107,7 @@ export class AutoSaveService {
     return this.saves.run(this.note.id, async () => {
       if (this.phase === 'conflict' && !restore || this.disposed || this.deleting || this.removed) return false;
       const linked = isSavedToSiYuan(this.note);
-      if (!linked && !toSiYuan) return this.persist();
+      if (!linked && !toSiYuan && (!this.autoSaveToSiYuan() || !this.hasContent())) return this.persist();
       if (!restore && linked && this.note.revision <= this.note.savedRevision && (!toSiYuan || this.note.storage === 'callout')) { await this.removeDraft(); return true; }
       if (!linked && !this.note.text.trim() && !this.note.caption?.trim()) {
         this.error = '速记内容为空，请输入内容后保存到思源'; this.phase = 'error'; this.notify(); return false;
