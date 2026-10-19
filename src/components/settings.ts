@@ -1,27 +1,24 @@
 import { Setting } from 'siyuan';
 import type { Settings, Target } from '../types';
 import type { Notebook } from '../services/repository';
-import { parseSettings } from '../core/settings';
-import { normalizeDirectoryInput } from '../core/directory';
+import { validateSettingsDraft } from '../core/settings';
 import { message } from '../services/autosave';
 import { shortcutLabel, type DesktopPlatform } from '../platform/runtime';
+import { hostLocale, translate } from '../core/i18n';
 
 export function createSettings(settings: Settings, notebooks: Notebook[], save: (value: Settings) => Promise<void>, shortcuts: () => void, recent: () => void, report: (text: string) => void, preview: (value: Settings) => Promise<Target>, platform: DesktopPlatform = 'windows'): Setting {
+  const tr = (value: string) => translate(value, hostLocale());
   let draft = { ...settings };
   let previewVersion = 0, saving = false;
   const previewResult = document.createElement('p'); previewResult.className = 'qn-directory-preview'; previewResult.setAttribute('role', 'status');
   previewResult.textContent = '预览当前笔记本和目录，不创建文档。时间模板以预览时刻计算。';
-  const validated = () => {
-    const directory = normalizeDirectoryInput(draft.directory);
-    if (!notebooks.some(notebook => notebook.id === draft.notebook)) throw new Error('请先选择一个已打开的普通笔记本');
-    return parseSettings({ ...draft, directory });
-  };
+  const validated = () => validateSettingsDraft(draft, notebooks.map(notebook => notebook.id));
   async function commit(): Promise<void> {
     if (saving) return;
     saving = true;
     try {
       const value = validated();
-      await preview(value); // Validate template syntax and its rendered path before persisting settings.
+      if (value.notebook) await preview(value); // Local-only use does not require a destination.
       await save(value);
     } catch (error) { report(`设置未保存：${message(error)}`); }
     finally { saving = false; }
@@ -40,7 +37,7 @@ export function createSettings(settings: Settings, notebooks: Notebook[], save: 
         catch (error) { previewResult.textContent = message(error); }
       }
     });
-    panel.addItem({ title, description, actionElement: element });
+    panel.addItem({ title: tr(title), description: description ? tr(description) : undefined, actionElement: element });
   }
   function select(options: Array<[string, string]>): HTMLSelectElement {
     const element = document.createElement('select');
@@ -57,10 +54,11 @@ export function createSettings(settings: Settings, notebooks: Notebook[], save: 
     element.onclick = action; panel.addItem({ title, description, actionElement: element });
   }
   button('全局快捷键', '打开思源快捷键设置', shortcuts, `默认 ${shortcutLabel(platform)}。在思源快捷键设置中搜索“新建悬浮速记”，统一管理绑定。桌面环境不支持时可从思源顶栏新建。`);
-  field('shortcutBehavior', '快捷键行为', select([['new', '新建速记'], ['recent', '唤醒最近窗口']]));
-  field('trayEnabled', '显示独立速记托盘图标', input('checkbox'), `${platform === 'linux' ? '通过托盘菜单新建、打开最近记录、管理窗口和设置；图标是否显示取决于桌面环境。' : '左键新建速记；右键打开最近记录、窗口管理和设置。'}可在菜单关闭图标，在这里重新开启。不修改思源原有托盘。`);
+  field('shortcutBehavior', '快捷键行为', select([['new', '新建速记'], ['recent', '唤醒最近窗口'], ['list', '打开速记列表']]));
+  field('trayEnabled', '显示独立速记托盘图标', input('checkbox'), `${platform === 'linux' ? '通过托盘菜单新建、打开最近记录、管理窗口和设置；图标是否显示取决于桌面环境。' : '左键行为可在下方设置；右键打开最近记录、窗口管理和设置。'}可在菜单关闭图标，在这里重新开启。不修改思源原有托盘。`);
+  field('trayClickAction', '托盘左键行为', select([['new', '新建便签'], ['recent', '打开速记列表']]), platform === 'linux' ? 'Linux 使用桌面环境提供的托盘菜单，此选项不改变菜单行为。' : '独立于全局快捷键行为，保存后立即生效。');
   field('notebook', '目标笔记本', select([['', '请选择笔记本'], ...notebooks.map(n => [n.id, n.name] as [string, string])]));
-  field('directory', '保存目录（支持模板变量）', input('text'), '默认模板：<code class="qn-template-example">/闪念速记/{{now | date "20060102150405"}}</code>。模板结果直接作为文档路径，同一路径的便签以各自的竖向超级块追加保存。不含模板变量时，在目录下生成时间与编号文档名。左上角显示文档标题。首次输入时确定路径，修改设置只影响新速记。');
+  field('directory', '保存目录（支持模板变量）', input('text'), '默认模板：<code class="qn-template-example">/闪念速记/{{now | date "20060102150405"}}</code>。模板结果直接作为文档路径，同一路径的便签以各自的竖向超级块追加保存。不含模板变量时，在目录下生成时间与编号文档名。左上角显示文档标题。首次保存到思源时确定路径，修改设置只影响尚未确定位置的速记。');
   const previewRow = document.createElement('div'); previewRow.className = 'qn-preview-row';
   const previewButton = document.createElement('button'); previewButton.className = 'b3-button b3-button--outline'; previewButton.textContent = '预览保存位置';
   previewButton.onclick = () => {
@@ -85,7 +83,10 @@ export function createSettings(settings: Settings, notebooks: Notebook[], save: 
   field('restoreWindows', '重启后恢复上次打开的窗口', input('checkbox'), '默认关闭；未保存草稿始终保留恢复入口。');
   field('debounceMs', '自动保存防抖（毫秒）', input('number', 100, 10000));
   field('maxWindows', '最多同时打开的便签', input('number', 1, 50), '默认 10 个，可设 1–50 个。达到上限后请先关闭一个便签；调小上限不会关闭已打开的便签。');
-  field('historyLimit', '最近速记记忆条数', input('number', 1, 200), '默认 50 条，可设 1–200 条。调小后只保留最近记录，不删除思源正文或本机恢复草稿；调大不能找回已移出的记录。');
+  field('historyLimit', '最近记录展示条数', input('number', 1, 200), '仅限制最近列表展示，不清理正文、副本或草稿。整理便签可查看全部记录。');
+  field('cleanupReminder', '启用整理提醒', input('checkbox'), '达到条数后每天最多轻提示一次，不会自动删除内容。');
+  field('cleanupThreshold', '整理提醒条数', input('number', 1, 100000));
+  field('archiveDays', '归档候选天数', input('number', 1, 3650), '按最后修改时间筛选，默认跳过正在打开的便签。');
   field('showSaved', '显示保存成功状态', input('checkbox'), '保存失败与冲突始终显示。');
   button('历史与恢复', '打开最近速记', recent);
   return panel;

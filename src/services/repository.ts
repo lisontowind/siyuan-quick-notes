@@ -1,14 +1,18 @@
 import type { KernelTransport, NoteRecord, Settings, Target } from '../types';
+import { validCalloutType, calloutIcons, calloutNames, type CalloutType } from '../core/callout';
 import { SerialQueue } from '../core/serial';
 import { createNote, timestamp, validNoteTitle, noteBody, migrateNoteTitle } from '../core/identity';
 import { normalizeDirectoryInput, normalizeResolvedDirectory } from '../core/directory';
 
 export class ConflictError extends Error {}
+export class MissingSourceError extends ConflictError {}
 export class UncertainWriteError extends Error {}
 export interface Notebook { id: string; name: string; closed: boolean; encrypted?: boolean }
 
-// SiYuan's row superblock stacks its children vertically; col places them side by side.
+// Native callouts retain one stable container ID, including during legacy conversion.
 export function wrapMarkdown(note: NoteRecord): string {
+  if (!validNoteTitle(note.caption)) throw new Error('便签标题须为不超过 200 字符的单行文本');
+  if (note.calloutType !== undefined && !validCalloutType(note.calloutType)) throw new Error('无效的提示块类别');
   if (!validNoteTitle(note.title)) throw new Error('速记标题须为不超过 200 字符的单行文本');
   let depth = 0, fence = '';
   const text = noteBody(note);
@@ -21,12 +25,31 @@ export function wrapMarkdown(note: NoteRecord): string {
   }
   if (depth) throw new Error('Markdown 中的超级块未闭合，请补全或放入代码块');
   if (fence) throw new Error('Markdown 代码块未闭合，请补全后保存');
-  return `{{{row\n${text || '\u200b'}\n}}}\n{: id="${note.blockId}" custom-quick-note="${note.id}"}\n`;
+  const type = note.calloutType ?? 'NOTE', caption = note.caption?.trim();
+  const escaped = caption?.replace(/[\\`*{}\[\]()#+.!_<>~|$=&-]/g, '\\$&');
+  const heading = `> [!${type}]${escaped ? ` ${calloutIcons[type]} ${escaped}` : ''}`;
+  const body = (text || '\u200b').split('\n').map(line => `> ${line}`).join('\n');
+  return `${heading}\n>\n${body}\n{: id="${note.blockId}" custom-quick-note="${note.id}" custom-quick-note-caption="${caption ? '1' : '0'}"}\n`;
 }
-export function unwrapMarkdown(raw: string): string {
+interface DecodedCallout { body: string; type: CalloutType; caption?: string }
+function decodeCallout(raw: string): DecodedCallout | undefined {
+  const lines = raw.replace(/\r\n/g, '\n').trimEnd().split('\n');
+  const attrs = lines.at(-1) ?? '';
+  if (!/^\{:\s.*\}$/.test(attrs) || !attrs.includes(' custom-quick-note="') || attrs.includes(' type="doc"')) return;
+  const header = /^> ?\[!([A-Za-z]+)\](?:[ \t]+(.*))?$/.exec(lines[0]);
+  if (!header) return;
+  const type = header[1].toUpperCase();
+  if (!validCalloutType(type)) throw new ConflictError('无效的提示块类别');
+  if (lines.slice(1, -1).some(line => line.trim() && !line.startsWith('>'))) throw new ConflictError('提示块结构不完整，已保留草稿');
+  let caption = header[2]?.trim() ?? '';
+  if (caption.startsWith(calloutIcons[type] + ' ')) caption = caption.slice(calloutIcons[type].length).trimStart();
+  caption = caption.replace(/\\([\\`*{}\[\]()#+.!_<>~|$=&-])/g, '$1');
+  if (!caption && attrs.includes(' custom-quick-note-caption="1"')) caption = calloutNames[type];
+  if (!validNoteTitle(caption)) throw new ConflictError('便签标题须为不超过 200 字符的单行文本');
+  return { type, caption: caption || undefined, body: lines.slice(1, -1).map(line => line.replace(/^> ?/, '')).join('\n').replace(/^\n/, '') };
+}
+function cleanMarkdown(raw: string): string {
   const lines = raw.replace(/\r\n/g, '\n').split('\n');
-  const attributes = [...lines].reverse().find(line => /^\{:\s.*\}\s*$/.test(line)) ?? '';
-  const legacy = attributes.includes(' custom-quick-note="') && !attributes.includes(' type="doc"');
   let fence = '';
   const clean = lines.flatMap(line => {
     const match = /^\s*(`{3,}|~{3,})/.exec(line);
@@ -40,12 +63,21 @@ export function unwrapMarkdown(raw: string): string {
     return [line.replace(/^(\s*(?:[-+*]|\d+[.)])\s+)\{:\s+[^}\n]*\bid="\d{14}-[a-z0-9]{7}"[^}\n]*\}\s*/, '$1')];
   });
   while (clean.length && !clean[clean.length - 1].trim()) clean.pop();
+  return clean.join('\n').replace(/\n+$/, '').replace(/^\u200b$/, '');
+}
+export function unwrapMarkdown(raw: string): string {
+  const callout = decodeCallout(raw);
+  if (callout) return cleanMarkdown(callout.body);
+  const attrs = raw.trimEnd().split('\n').at(-1) ?? '';
+  const legacy = attrs.includes(' custom-quick-note="') && !attrs.includes(' type="doc"');
+  const clean = cleanMarkdown(raw).split('\n');
   if (legacy && /^\{\{\{(?:col|row)\s*$/.test(clean[0]) && clean.at(-1)?.trim() === '}}}') { clean.shift(); clean.pop(); }
   return clean.join('\n').replace(/\n+$/, '').replace(/^\u200b$/, '');
 }
 export function validBlockId(id: string): boolean { return /^\d{14}-[a-z0-9]{7}$/.test(id); }
-export function unwrapNoteMarkdown(raw: string): { text: string; title: undefined } {
-  return { text: unwrapMarkdown(raw), title: undefined };
+export function unwrapNoteMarkdown(raw: string): { text: string; title: undefined; caption?: string; calloutType?: CalloutType } {
+  const callout = decodeCallout(raw);
+  return { text: unwrapMarkdown(raw), title: undefined, ...(callout ? { caption: callout.caption, calloutType: callout.type } : {}) };
 }
 
 export class NoteRepository {
@@ -54,16 +86,23 @@ export class NoteRepository {
     private normalize: (text: string) => string = text => text.replace(/\r\n/g, '\n').replace(/\n+$/, '')) {}
   private sameContent(raw: string, note: NoteRecord): boolean {
     try {
-      return this.normalize(unwrapMarkdown(raw)) === this.normalize(unwrapMarkdown(wrapMarkdown(note)));
+      const source = unwrapNoteMarkdown(raw), expected = unwrapNoteMarkdown(wrapMarkdown(note));
+      return this.normalize(source.text) === this.normalize(expected.text)
+        && (!source.calloutType || source.calloutType === expected.calloutType && source.caption === expected.caption);
     } catch (error) { throw new UncertainWriteError(`正文核对失败，草稿已保留：${error instanceof Error ? error.message : String(error)}`); }
   }
   private hasContainer(raw: string, note: NoteRecord): boolean {
     const lines = raw.replace(/\r\n/g, '\n').trimEnd().split('\n');
     const attributes = lines.at(-1) || '';
-    return /^\{\{\{(?:col|row)\s*$/.test(lines[0]) && lines.at(-2)?.trim() === '}}}'
-      && /^\{:\s.*\}$/.test(attributes) && attributes.includes(` id="${note.blockId}"`)
+    const owned = /^\{:\s.*\}$/.test(attributes) && attributes.includes(` id="${note.blockId}"`)
       && attributes.includes(` custom-quick-note="${note.id}"`);
+    return owned && (!!decodeCallout(raw) || /^\{\{\{(?:col|row)\s*$/.test(lines[0]) && lines.at(-2)?.trim() === '}}}');
   }
+  private contentStamp(raw: string): string {
+    const value = unwrapNoteMarkdown(raw);
+    return JSON.stringify([this.normalize(value.text), value.calloutType, value.caption]);
+  }
+
   async notebooks(): Promise<Notebook[]> {
     const data = await this.api.post<{ notebooks: Notebook[] }>('/api/notebook/lsNotebooks');
     return data.notebooks.filter(n => !n.closed && !n.encrypted);
@@ -90,6 +129,22 @@ export class NoteRepository {
     if (!validBlockId(id)) throw new Error('无效的文档 ID');
     return (await this.api.post<Array<{ id: string; root_id: string }>>('/api/query/sql', { stmt: `SELECT id, root_id FROM blocks WHERE id = '${id}' LIMIT 1` }))[0];
   }
+  async assertSource(note: NoteRecord): Promise<void> {
+    await this.api.post('/api/sqlite/flushTransaction');
+    const id = note.storage === 'document' ? note.docId! : note.blockId;
+    const source = await this.lookup(id);
+    if (!source) throw new MissingSourceError('思源中已删除，是否删除便签或恢复到思源？');
+    if (source.root_id !== note.docId) throw new ConflictError('速记内容块已被移动或标识不匹配，已停止保存');
+  }
+  async restore(note: NoteRecord, persistIntent: () => Promise<void>): Promise<void> {
+    try { await this.assertSource(note); }
+    catch (error) {
+      if (!(error instanceof MissingSourceError)) throw error;
+      note.docId = undefined; note.baseline = undefined; note.docPath = undefined; note.docTitle = undefined;
+      note.storage = 'callout'; note.siyuanSaved = false;
+    }
+    await this.save(note, persistIntent);
+  }
   async save(note: NoteRecord, persistIntent: () => Promise<void>): Promise<void> {
     Object.assign(note, migrateNoteTitle(note));
     wrapMarkdown(note);
@@ -105,12 +160,12 @@ export class NoteRepository {
         if (note.baseline === undefined && !this.sameContent(old, note)) throw new ConflictError('发现已存在的内容，请重新载入后继续编辑');
         note.blockId = createNote(note.createdAt).blockId;
       } else if (note.docId || note.baseline !== undefined) {
-        throw new ConflictError('原文档已删除，已停止保存');
+        throw new MissingSourceError('思源中已删除，是否删除便签或恢复到思源？');
       }
       note.target = undefined;
       note.docId = undefined; note.baseline = undefined; note.docPath = undefined; note.docTitle = undefined;
     }
-    note.storage = 'superblock';
+    note.storage = 'callout';
     note.target ??= await this.resolveTarget(note);
     await persistIntent();
     const markdown = wrapMarkdown(note);
@@ -132,15 +187,15 @@ export class NoteRepository {
         if (!this.hasContainer(raw, note)) throw new ConflictError('速记容器标识不匹配，已停止保存');
         if (note.baseline !== undefined && note.baseline !== raw && !this.sameContent(raw, note)) throw new ConflictError('原文已在其他位置修改，请重新载入或另存速记');
         if (note.baseline === undefined && !this.sameContent(raw, note)) throw new ConflictError('发现已存在的内容，请重新载入后继续编辑');
-        if (!this.sameContent(raw, note) || !/^\{\{\{row\s*\n/.test(raw)) {
+        if (!this.sameContent(raw, note) || !decodeCallout(raw)) {
           await this.api.post('/api/block/updateBlock', { id: note.blockId, dataType: 'markdown', data: markdown });
         }
       } else {
-        if (note.baseline !== undefined) throw new ConflictError('原内容块已删除，已停止自动保存');
+        if (note.baseline !== undefined) throw new MissingSourceError('思源中已删除，是否删除便签或恢复到思源？');
         await this.api.post('/api/block/appendBlock', { parentID: note.docId, dataType: 'markdown', data: markdown });
       }
       const raw = await this.read(note.blockId);
-      if (!this.hasContainer(raw, note) || !/^\{\{\{row\s*\n/.test(raw)) throw new UncertainWriteError('内核未保留竖向速记容器标识，草稿已保留');
+      if (!this.hasContainer(raw, note) || !decodeCallout(raw)) throw new UncertainWriteError('内核未保留原生提示块标识，草稿已保留');
       if (!this.sameContent(raw, note)) throw new ConflictError('写入后正文与提交内容不一致，草稿已保留，请重新载入或另存速记');
       note.baseline = raw;
     });
@@ -162,9 +217,14 @@ export class NoteRepository {
     return note.docPath || note.target?.path;
   }
   async reload(note: NoteRecord): Promise<NoteRecord> {
+    await this.assertSource(note);
     const raw = await this.read(note.storage === 'document' ? note.docId! : note.blockId);
     if (note.storage !== 'document' && !this.hasContainer(raw, note)) throw new ConflictError('速记容器标识不匹配，已停止重新载入');
-    return { ...note, ...unwrapNoteMarkdown(raw), docPath: await this.documentPath(note), docTitle: await this.documentTitle(note), baseline: raw,
-      revision: note.revision + 1, savedRevision: note.revision + 1, updatedAt: Date.now() };
+    const decoded = unwrapNoteMarkdown(raw);
+    return { ...note, ...decoded, calloutType: decoded.calloutType ?? note.calloutType ?? 'NOTE',
+      storage: decoded.calloutType ? 'callout' : note.storage === 'document' ? 'document' : 'superblock', siyuanSaved: true, docPath: await this.documentPath(note), docTitle: await this.documentTitle(note), baseline: raw,
+      revision: note.revision + 1, savedRevision: note.revision + 1,
+      updatedAt: note.baseline !== undefined ? (this.contentStamp(note.baseline) === this.contentStamp(raw) ? note.updatedAt : Date.now())
+        : note.revision > 0 && !this.sameContent(raw, note) ? Date.now() : note.updatedAt };
   }
 }

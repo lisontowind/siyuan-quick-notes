@@ -5,7 +5,7 @@ import { ConflictError, NoteRepository, unwrapMarkdown, unwrapNoteMarkdown, wrap
 import { FakeKernel } from './fake-kernel';
 
 describe('kernel-backed notes', () => {
-  it('updates an old horizontal container vertically in place and preserves neighboring content', async () => {
+  it('converts an old horizontal container to a native callout in place and preserves neighboring content', async () => {
     const api = new FakeKernel(), repo = new NoteRepository(api, () => ({ ...defaults, notebook: api.notebook }));
     const sourceDoc = '20261010000000-doc0001', otherBlock = '20261010000000-other01';
     const note = { ...createNote(), docId: sourceDoc, title: '旧标题', text: '旧正文',
@@ -19,13 +19,33 @@ describe('kernel-backed notes', () => {
     note.text = '新正文';
     await repo.save(note, async () => {});
     expect(note.target.path).toBe('/旧目录/共享文档');
-    expect(note.storage).toBe('superblock'); expect(note.docId).toBe(sourceDoc);
+    expect(note.storage).toBe('callout'); expect(note.docId).toBe(sourceDoc);
     expect(note.blockId).toBe(sourceBlock); expect(note.docPath).toBe(note.target.path);
-    expect(api.blocks.get(sourceBlock)?.raw).toMatch(/^\{\{\{row\n/); expect(api.blocks.get(otherBlock)?.raw).toBe('其他便签');
-    expect(unwrapNoteMarkdown(note.baseline!)).toEqual({ title: undefined, text: '# 旧标题\n\n新正文' });
+    expect(api.blocks.get(sourceBlock)?.raw).toMatch(/^> \[!NOTE\]\n/); expect(api.blocks.get(otherBlock)?.raw).toBe('其他便签');
+    expect(unwrapNoteMarkdown(note.baseline!)).toMatchObject({ title: undefined, text: '# 旧标题\n\n新正文' });
     note.text = '# 新标题\n\n新正文'; await repo.save(note, async () => {});
     expect(api.docs.size).toBe(1); expect(api.blocks.get(otherBlock)?.raw).toBe('其他便签');
     expect(api.calls.some(call => call.path.endsWith('deleteBlock') || call.path.endsWith('appendBlock'))).toBe(false);
+  });
+  it.each(['caption', 'calloutType'] as const)('detects external changes to callout %s even when the body is unchanged', async field => {
+    const api = new FakeKernel(), repo = new NoteRepository(api, () => ({ ...defaults, notebook: api.notebook }));
+    const note = { ...createNote(), text: 'body', caption: 'original title', calloutType: 'NOTE' as const };
+    await repo.save(note, async () => {}); const baseline = note.baseline;
+    const external = { ...note, ...(field === 'caption' ? { caption: 'external title' } : { calloutType: 'CAUTION' as const }) };
+    api.blocks.get(note.blockId)!.raw = wrapMarkdown(external);
+    await expect(repo.save(note, async () => {})).rejects.toBeInstanceOf(ConflictError); expect(note.baseline).toBe(baseline);
+    const reloaded = await repo.reload(note); expect(reloaded[field]).toBe(external[field]); expect(reloaded.text).toBe('body');
+    expect(reloaded.storage).toBe('callout');
+  });
+  it('rejects category changes made after writing, retaining the original baseline for retry', async () => {
+    const api = new FakeKernel(), repo = new NoteRepository(api, () => ({ ...defaults, notebook: api.notebook })), note = { ...createNote(), text: 'before', calloutType: 'NOTE' as const };
+    await repo.save(note, async () => {}); const baseline = note.baseline, original = api.post.bind(api);
+    api.post = async <T>(path: string, body?: any): Promise<T> => {
+      const result = await original<T>(path, body);
+      if (path.endsWith('updateBlock')) api.blocks.get(note.blockId)!.raw = wrapMarkdown({ ...note, calloutType: 'WARNING' });
+      return result;
+    };
+    note.text = 'after'; await expect(repo.save(note, async () => {})).rejects.toBeInstanceOf(ConflictError); expect(note.baseline).toBe(baseline);
   });
   it('stops container updates when the shared source has external changes', async () => {
     const api = new FakeKernel(), repo = new NoteRepository(api, () => ({ ...defaults, notebook: api.notebook }));
@@ -40,20 +60,20 @@ describe('kernel-backed notes', () => {
     const note = { ...createNote(), title: '标题 # * [链接](url) & $x$ \\ "引号"', text: '# 正文标题\n\n正文' };
     await repo.save(note, async () => {});
     const raw = api.blocks.get(note.blockId)!.raw;
-    expect(raw).toMatch(/^\{\{\{row\n# /); expect(raw).not.toContain('{{{col');
+    expect(raw).toMatch(/^> \[!NOTE\]\n>\n> # /); expect(raw).not.toContain('{{{col');
     expect(note.docId).not.toBe(note.blockId); expect(note.target?.path).not.toContain('标题');
     expect(note.title).toBeUndefined(); expect(raw).not.toContain('custom-quick-note-titled');
-    expect(unwrapNoteMarkdown(raw)).toEqual({ title: undefined, text: note.text });
+    expect(unwrapNoteMarkdown(raw)).toMatchObject({ title: undefined, text: note.text });
     expect(await repo.reload({ ...note, text: '' })).toMatchObject({ title: undefined, text: note.text });
     note.text = '# 正文标题\n\n正文'; await repo.save(note, async () => {});
-    expect(unwrapNoteMarkdown(api.blocks.get(note.blockId)!.raw)).toEqual({ title: undefined, text: note.text });
+    expect(unwrapNoteMarkdown(api.blocks.get(note.blockId)!.raw)).toMatchObject({ title: undefined, text: note.text });
   });
   it('keeps legacy body headings as body and reads externally edited titled headings', () => {
     const note = { ...createNote(), text: '# Existing heading\n\nbody' };
-    expect(unwrapNoteMarkdown(wrapMarkdown(note))).toEqual({ title: undefined, text: note.text });
+    expect(unwrapNoteMarkdown(wrapMarkdown(note))).toMatchObject({ title: undefined, text: note.text });
     const raw = wrapMarkdown({ ...note, title: 'old title' }).replace('# old title', '# 新标题');
-    expect(unwrapNoteMarkdown(raw)).toEqual({ title: undefined, text: `# 新标题\n\n${note.text}` });
-    expect(unwrapNoteMarkdown(wrapMarkdown({ ...note, title: 'only title', text: '' }))).toEqual({ title: undefined, text: '# only title' });
+    expect(unwrapNoteMarkdown(raw)).toMatchObject({ title: undefined, text: `# 新标题\n\n${note.text}` });
+    expect(unwrapNoteMarkdown(wrapMarkdown({ ...note, title: 'only title', text: '' }))).toMatchObject({ title: undefined, text: '# only title' });
   });
   it('reads the current document title after a rename and falls back without showing a path', async () => {
     const api = new FakeKernel(), repo = new NoteRepository(api, () => ({ ...defaults, notebook: api.notebook }));
@@ -72,8 +92,8 @@ describe('kernel-backed notes', () => {
     const note = { ...createNote(), storage: 'document' as const, text: '草稿正文',
       target: { notebook: api.notebook, path: '/Old/Independent' } };
     await repo.save(note, async () => {});
-    expect(note.storage).toBe('superblock'); expect(note.target.path).toBe('/闪念速记/20261010035000');
-    expect(api.blocks.get(note.blockId)?.raw).toMatch(/^\{\{\{row\n草稿正文/);
+    expect(note.storage).toBe('callout'); expect(note.target.path).toBe('/闪念速记/20261010035000');
+    expect(api.blocks.get(note.blockId)?.raw).toMatch(/^> \[!NOTE\]\n>\n> 草稿正文/);
     expect(api.docs.size).toBe(1);
   });
   it('keeps a deleted whole-document source deleted and retains the local content', async () => {

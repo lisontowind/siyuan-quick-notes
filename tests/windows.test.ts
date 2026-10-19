@@ -11,6 +11,9 @@ import type { Draft, NoteRecord, Response, Settings, WindowRecoveryState } from 
 class FakeWindow implements NativeWindow {
   callbacks = new Map<string, (...args: any[]) => void>(); destroyed = false; pinned = false; shown = false;
   webContents = { on: vi.fn(), openDevTools: vi.fn() };
+  messages = new Map<number, (wParam: Uint8Array, lParam: Uint8Array) => void>();
+  hookWindowMessage(message: number, callback: (wParam: Uint8Array, lParam: Uint8Array) => void) { this.messages.set(message, callback); }
+  unhookWindowMessage = vi.fn((message: number) => { this.messages.delete(message); });
   constructor(public options: any = {}) { this.pinned = options.alwaysOnTop ?? false; }
   on(name: string, callback: (...args: any[]) => void) { this.callbacks.set(name, callback); }
   removeAllListeners() { this.callbacks.clear(); }
@@ -96,7 +99,7 @@ describe('native windows and ownership', () => {
       expect(manager.windows.size).toBe(5); expect(created).toHaveLength(5);
       const entries = [...manager.windows.values()];
       await Promise.all(entries.map((entry, i) => entry.service.edit(`independent ${i}`, 1)));
-      await Promise.all(entries.map(entry => entry.service.flush()));
+      await Promise.all(entries.map(entry => entry.service.saveToSiYuan()));
       expect(api.blocks.size).toBe(5); expect(new Set(entries.map(entry => entry.service.note.text)).size).toBe(5);
       created[0].setAlwaysOnTop(true); expect(created[1].isAlwaysOnTop()).toBe(false);
       created[0].destroy(); expect(manager.windows.size).toBe(4); expect(created.slice(1).every(win => !win.destroyed)).toBe(true);
@@ -115,31 +118,34 @@ function harness(settings: Settings = { ...defaults, debounceMs: 10000 }, initia
   vi.stubGlobal('document', { documentElement: { getAttribute: () => 'light' } });
   vi.stubGlobal('location', { origin: 'http://localhost:6806' });
   const values = new Map(initialDrafts.map(draft => [draft.note.id, structuredClone(draft)]));
+  const backups = new Map<string, Draft>();
   let geometries: Record<string, WindowRecoveryState> = Object.fromEntries(initialDrafts.filter(draft => draft.geometry).map(draft => [draft.note.id, draft.geometry!]));
   const writes = vi.fn(async (draft: Draft) => { values.set(draft.note.id, structuredClone(draft)); });
   const drafts = { write: writes, remove: vi.fn(async (id: string) => { values.delete(id); }), list: async () => [...values.values()],
+    backup: vi.fn(async (draft: Draft) => { backups.set(draft.note.id, structuredClone(draft)); }),
+    readBackup: async (id: string) => backups.get(id), removeBackup: vi.fn(async (id: string) => { backups.delete(id); }),
     loadWindowState: async () => structuredClone(geometries), saveWindowState: vi.fn(async (value: Record<string, WindowRecoveryState>) => { geometries = structuredClone(value); }), warnings: [] } as unknown as LocalDraftStore;
   const api = new FakeKernel(), repo = new NoteRepository(api, () => settings), created: FakeWindow[] = [];
   const persistHistory = vi.fn().mockResolvedValue(undefined), report = vi.fn(), confirmDelete = vi.fn().mockResolvedValue(true);
   const create = vi.fn(async (_url: string, _geometry: import('../src/types').Geometry) => { const win = new FakeWindow(); created.push(win); return win; });
   const upload = vi.fn(async (_images: import('../src/types').ImageInput[]) => '![截图](assets/test.png)');
-  const windowListChanged = vi.fn();
+  const windowListChanged = vi.fn(), openDoc = vi.fn(), chooseMissingSource = vi.fn<() => Promise<import('../src/types').MissingSourceChoice>>().mockResolvedValue('cancel');
   const manager = new QuickNoteWindowManager({ create,
-    geometry: () => ({ width: 420, height: 320, pinned: false, open: true }), focus() {} }, repo, drafts, () => settings, history, persistHistory, report, () => {}, () => {}, confirmDelete, externalWindowCount, { upload }, windowListChanged);
+    geometry: () => ({ width: 420, height: 320, pinned: false, open: true }), focus() {} }, repo, drafts, () => settings, history, persistHistory, report, openDoc, () => {}, confirmDelete, externalWindowCount, { upload }, windowListChanged, undefined, chooseMissingSource);
   const peer = new BroadcastChannel(manager.channelName), messages: Response[] = [];
-  const snapshots = new Map<string, Pick<NoteRecord, 'text' | 'title' | 'revision'>>();
+  const snapshots = new Map<string, Pick<NoteRecord, 'text' | 'title' | 'caption' | 'calloutType' | 'revision'>>();
   let acknowledge = true;
   peer.onmessage = event => {
     const response = event.data as Response; messages.push(response);
     if (response.collect && acknowledge) {
       const snapshot = snapshots.get(response.windowId) ?? manager.windows.get(response.windowId)?.service.note;
       if (snapshot) peer.postMessage({ session: manager.session, windowId: response.windowId, requestId: response.requestId,
-        action: 'collected', text: snapshot.text, title: snapshot.title, revision: snapshot.revision });
+        action: 'collected', text: snapshot.text, title: snapshot.title, caption: snapshot.caption, calloutType: snapshot.calloutType, revision: snapshot.revision });
     }
   };
   const request = (id: string, action: string, extra = {}) => peer.postMessage({ session: manager.session, windowId: id,
     requestId: crypto.randomUUID(), action, ...extra });
-  return { manager, repo, api, drafts, values, writes, created, create, persistHistory, messages, snapshots, request, report, confirmDelete, upload, windowListChanged,
+  return { manager, repo, api, drafts, values, writes, created, create, persistHistory, messages, snapshots, request, report, confirmDelete, upload, windowListChanged, openDoc, backups, chooseMissingSource,
     ignoreCollections: () => { acknowledge = false; },
     cleanup: async () => { await manager.dispose(); peer.close(); created.forEach(win => win.destroy()); vi.unstubAllGlobals(); } };
 }
@@ -154,6 +160,105 @@ it.each(['en_US', 'zh_CN'])('passes SiYuan language %s into the isolated note re
 });
 
 describe('durable window shutdown and independent input', () => {
+  it.each(['', '  \n\t'])('removes a new blank note on close without creating SiYuan content: %j', async text => {
+    const h = harness(), note = createNote();
+    try {
+      await h.manager.open(note); h.snapshots.set(note.id, { text, revision: 1 }); h.request(note.id, 'close');
+      await vi.waitFor(() => expect(h.created[0].destroyed).toBe(true));
+      expect(h.values.has(note.id)).toBe(false); expect(h.backups.has(note.id)).toBe(false);
+      expect((await h.drafts.loadWindowState())[note.id]).toBeUndefined(); expect(h.api.calls).toEqual([]);
+    } finally { await h.cleanup(); }
+  });
+  it('removes a typed-then-cleared new note during shutdown but keeps saved empty notes', async () => {
+    const h = harness(), note = createNote(), saved = createNote();
+    try {
+      await h.manager.open(note); await h.manager.windows.get(note.id)!.service.edit('typed', 1);
+      h.snapshots.set(note.id, { text: '', revision: 2 });
+      await h.manager.open(saved); const service = h.manager.windows.get(saved.id)!.service;
+      await service.edit('saved', 1); await service.saveToSiYuan(); await service.edit('', 2); await service.flush();
+      await h.manager.dispose();
+      expect(h.values.has(note.id)).toBe(false); expect((await h.drafts.loadWindowState())[note.id]).toBeUndefined();
+      expect(h.backups.get(saved.id)?.note.text).toBe(''); expect(h.manager.history.some(item => item.id === saved.id)).toBe(true);
+    } finally { await h.cleanup(); }
+  });
+  it.each(['cancel', 'restore', 'delete'] as const)('prompts when reopening a deleted source and applies %s to the saved plugin copy', async choice => {
+    const h = harness(), note = createNote();
+    try {
+      await h.manager.open(note); const service = h.manager.windows.get(note.id)!.service;
+      await service.edit('full body\n\nsecond paragraph', 1); await service.saveToSiYuan();
+      expect(h.backups.get(note.id)?.note.text).toBe(service.note.text);
+      h.request(note.id, 'close'); await vi.waitFor(() => expect(h.manager.windows.has(note.id)).toBe(false));
+      const history = h.manager.history[0]; h.api.blocks.delete(note.blockId); h.api.docs.clear();
+      h.chooseMissingSource.mockResolvedValue(choice); const before = h.api.calls.length;
+      await h.manager.reopen(history); expect(h.chooseMissingSource).toHaveBeenCalledOnce();
+      if (choice === 'restore') {
+        expect(h.manager.windows.get(note.id)?.service.note.text).toBe('full body\n\nsecond paragraph');
+        expect(h.api.blocks.get(note.blockId)?.raw).toContain('second paragraph'); expect(h.api.docs.size).toBe(1);
+      } else {
+        expect(h.manager.windows.has(note.id)).toBe(false); expect(h.api.calls.slice(before).some(call => call.path.endsWith('createDocWithMd'))).toBe(false);
+        expect(h.backups.has(note.id)).toBe(choice === 'cancel');
+        expect(h.manager.history.some(item => item.id === note.id)).toBe(choice === 'cancel');
+        expect(h.confirmDelete).not.toHaveBeenCalled();
+      }
+    } finally { await h.cleanup(); }
+  });
+  it('prompts from the open-in-SiYuan button and restores the latest unsent edit only after a choice', async () => {
+    const h = harness(), note = createNote();
+    try {
+      await h.manager.open(note); const service = h.manager.windows.get(note.id)!.service;
+      await service.edit('original', 1); await service.saveToSiYuan(); h.api.blocks.delete(note.blockId);
+      h.snapshots.set(note.id, { text: 'latest unsent edit', revision: 2 }); h.chooseMissingSource.mockResolvedValue('restore');
+      await h.manager.siYuan(note.id);
+      expect(h.chooseMissingSource).toHaveBeenCalledWith(expect.objectContaining({ id: note.id }), h.created[0]);
+      expect(h.api.blocks.get(note.blockId)?.raw).toContain('latest unsent edit'); expect(h.openDoc).toHaveBeenCalledOnce();
+    } finally { await h.cleanup(); }
+  });
+  it('does not report a source deletion on network errors or fabricate content without a backup', async () => {
+    const h = harness(), note = createNote();
+    try {
+      await h.manager.open(note); const service = h.manager.windows.get(note.id)!.service;
+      await service.edit('original', 1); await service.saveToSiYuan();
+      h.request(note.id, 'close'); await vi.waitFor(() => expect(h.manager.windows.has(note.id)).toBe(false));
+      h.api.fail = '/api/query/sql'; await expect(h.manager.reopen(h.manager.history[0])).rejects.toThrow('offline');
+      expect(h.chooseMissingSource).not.toHaveBeenCalled(); h.api.fail = undefined;
+      h.api.blocks.delete(note.blockId); h.backups.delete(note.id); h.chooseMissingSource.mockResolvedValue('restore');
+      await expect(h.manager.reopen(h.manager.history[0])).rejects.toThrow('副本'); expect(h.api.blocks.size).toBe(0);
+    } finally { await h.cleanup(); }
+  });
+  it('collects unsent editor content for a list or toolbar SiYuan action, then opens only on a later action', async () => {
+    const h = harness(), note = createNote();
+    try {
+      await h.manager.open(note); h.snapshots.set(note.id, { text: 'unsent current content', revision: 1 });
+      await h.manager.siYuan(note.id);
+      expect(h.api.blocks.get(note.blockId)?.raw).toContain('unsent current content'); expect(h.openDoc).not.toHaveBeenCalled();
+      expect(h.manager.windows.get(note.id)!.service.note.siyuanSaved).toBe(true);
+      await h.manager.siYuan(note.id); expect(h.openDoc).toHaveBeenCalledOnce(); expect(h.api.docs.size).toBe(1);
+      expect(h.messages.some(message => message.state?.siyuanSaved)).toBe(true);
+    } finally { await h.cleanup(); }
+  });
+  it('keeps the save button state after a partial first write and blocks overlapping actions', async () => {
+    const h = harness(), note = createNote(), started = deferred(), release = deferred();
+    try {
+      await h.manager.open(note); h.snapshots.set(note.id, { text: 'keep', revision: 1 });
+      const original = h.repo.save.bind(h.repo);
+      vi.spyOn(h.repo, 'save').mockImplementationOnce(async (note, persist) => { started.resolve(); await release.promise; return original(note, persist); });
+      h.api.fail = '/api/block/appendBlock';
+      const saving = h.manager.siYuan(note.id).then(() => undefined, error => error); await started.promise;
+      await expect(h.manager.siYuan(note.id)).rejects.toThrow('忙碌'); release.resolve(); expect(await saving).toBeInstanceOf(Error);
+      expect(h.manager.windows.get(note.id)!.service.note.siyuanSaved).toBe(false); expect(h.values.get(note.id)?.note.text).toBe('keep');
+      expect(h.openDoc).not.toHaveBeenCalled();
+    } finally { release.resolve(); await h.cleanup(); }
+  });
+  it('does not ask the host again for a deletion already confirmed inside the list', async () => {
+    const h = harness(), note = createNote();
+    try {
+      await h.manager.open(note); await h.manager.windows.get(note.id)!.service.edit('keep original', 1);
+      await h.manager.windows.get(note.id)!.service.saveToSiYuan();
+      h.confirmDelete.mockResolvedValue(false);
+      expect(await h.manager.deleteNote(note, true)).toBe(true); expect(h.confirmDelete).not.toHaveBeenCalled();
+      expect(h.api.blocks.get(note.blockId)?.raw).toContain('keep original');
+    } finally { await h.cleanup(); }
+  });
   it('resumes a note after cancelling deletion even if unpinning and restoring pin both fail', async () => {
     const h = harness(), note = createNote();
     try {
@@ -163,7 +268,7 @@ describe('durable window shutdown and independent input', () => {
       h.confirmDelete.mockResolvedValue(false);
       expect(await h.manager.deleteNote(note)).toBe(false); expect(h.confirmDelete).toHaveBeenCalledOnce();
       const service = h.manager.windows.get(note.id)!.service;
-      await service.edit('Kept after cancelling', 1, false); expect(await service.flush()).toBe(true);
+      await service.edit('Kept after cancelling', 1, false); expect(await service.saveToSiYuan()).toBe(true);
       expect(service.phase).toBe('saved');
     } finally { await h.cleanup(); }
   });
@@ -173,7 +278,7 @@ describe('durable window shutdown and independent input', () => {
     try {
       await h.manager.open(note); expect(snapshots.at(-1)).toEqual(['']);
       const service = h.manager.windows.get(note.id)!.service;
-      await service.edit('Original summary', 1, false); await service.flush();
+      await service.edit('Original summary', 1, false); await service.saveToSiYuan();
       expect(snapshots.at(-1)).toEqual(['Original summary']);
       await service.edit('Edited summary', 2, false); expect(snapshots.at(-1)).toEqual(['Edited summary']);
       await service.reload(); expect(snapshots.at(-1)).toEqual(['Original summary']);
@@ -193,7 +298,7 @@ describe('durable window shutdown and independent input', () => {
       h.request(note.id, 'pin'); h.request(note.id, 'minimize');
       await vi.waitFor(() => expect(h.report).toHaveBeenCalledWith(expect.stringContaining('无法最小化')));
       expect(service.phase).toBe('empty'); expect(service.error).toBeUndefined();
-      await service.edit('Still editable', 1, false); expect(await service.flush()).toBe(true);
+      await service.edit('Still editable', 1, false); expect(await service.saveToSiYuan()).toBe(true);
       expect(service.phase).toBe('saved'); expect(h.manager.windows.size).toBe(1);
     } finally { h.windowListChanged.mockImplementation(() => {}); await h.cleanup(); }
   });
@@ -227,7 +332,7 @@ describe('durable window shutdown and independent input', () => {
       h.upload.mockRejectedValueOnce(new Error('upload failed'));
       h.request(note.id, 'upload-images', { images: [{ name: 'x.png', data: new ArrayBuffer(8) }] });
       await vi.waitFor(() => expect(h.messages.some(item => item.imageUpload?.error === 'upload failed')).toBe(true));
-      expect(service.note.text).toBe('preserved text'); expect(service.phase).toBe('dirty');
+      expect(service.note.text).toBe('preserved text'); expect(service.phase).toBe('local');
     } finally { await h.cleanup(); }
   });
   it('finishes shutdown within its deadline when native creation has not resolved', async () => {
@@ -372,6 +477,19 @@ describe('durable window shutdown and independent input', () => {
       expect(h.created).toHaveLength(2);
     } finally { await h.cleanup(); }
   });
+  it('preserves caption-only notes on close, republishes titles on reopening', async () => {
+    const h = harness(), note = createNote();
+    try {
+      await h.manager.open(note); expect(h.created[0].callbacks.has('system-context-menu')).toBe(false); expect(h.created[0].messages.size).toBe(0);
+      h.request(note.id, 'edit', { text: '', caption: '独立标题', revision: 1 });
+      await vi.waitFor(() => expect(h.values.get(note.id)?.note.caption).toBe('独立标题'));
+      await vi.waitFor(() => expect(h.messages.some(response => response.state?.caption === '独立标题' && response.state.title === '独立标题')).toBe(true));
+      h.request(note.id, 'close'); await vi.waitFor(() => expect(h.manager.windows.size).toBe(0));
+      expect(h.values.get(note.id)?.note.caption).toBe('独立标题'); expect(h.api.blocks.size).toBe(0);
+      await h.manager.reopen(h.values.get(note.id)!.note); h.request(note.id, 'ready');
+      await vi.waitFor(() => expect(h.messages.some(response => response.content?.caption === '独立标题')).toBe(true));
+    } finally { await h.cleanup(); }
+  });
   it('publishes the first nonblank content line as the window title', async () => {
     const h = harness(), note = createNote();
     try {
@@ -386,7 +504,7 @@ describe('durable window shutdown and independent input', () => {
     try {
       for (const [index, note] of notes.entries()) {
         await h.manager.open(note); const service = h.manager.windows.get(note.id)!.service;
-        await service.edit(`saved ${index}`, 1); await service.flush();
+        await service.edit(`saved ${index}`, 1); await service.saveToSiYuan();
       }
       expect(h.manager.history).toHaveLength(1); expect(h.values.size).toBe(0);
       await h.manager.dispose();
@@ -414,7 +532,7 @@ describe('durable window shutdown and independent input', () => {
     const h = harness(), note = createNote();
     try {
       await h.manager.open(note); const service = h.manager.windows.get(note.id)!.service;
-      await service.edit('saved', 1); await service.flush(); await service.edit('draft', 2);
+      await service.edit('saved', 1); await service.saveToSiYuan(); await service.edit('draft', 2);
       h.confirmDelete.mockResolvedValue(false);
       expect(await h.manager.deleteNote(service.note)).toBe(false);
       expect(h.api.blocks.has(note.blockId)).toBe(true); expect(h.values.get(note.id)?.note.text).toBe('draft');
@@ -425,10 +543,10 @@ describe('durable window shutdown and independent input', () => {
     const h = harness(), note = createNote(), started = deferred(), release = deferred();
     try {
       await h.manager.open(note); const service = h.manager.windows.get(note.id)!.service;
-      await service.edit('first', 1); await service.flush(); await service.edit('second', 2);
+      await service.edit('first', 1); await service.saveToSiYuan(); await service.edit('second', 2);
       const save = h.repo.save.bind(h.repo);
       vi.spyOn(h.repo, 'save').mockImplementationOnce(async (...args) => { started.resolve(); await release.promise; await save(...args); });
-      const saving = service.flush(); await started.promise;
+      const saving = service.saveToSiYuan(); await started.promise;
       const deleting = h.manager.deleteNote(service.note);
       await vi.waitFor(() => expect(h.messages.some(item => item.collect)).toBe(true));
       expect(h.api.blocks.has(note.blockId)).toBe(true); release.resolve(); await saving;
@@ -436,7 +554,7 @@ describe('durable window shutdown and independent input', () => {
       expect(h.api.blocks.get(note.blockId)?.raw).toContain('second'); expect(h.values.has(note.id)).toBe(false);
       expect(h.manager.history).toHaveLength(0); expect(h.created[0].destroyed).toBe(true);
       expect((await h.drafts.loadWindowState())[note.id]).toBeUndefined();
-      const before = [...h.api.blocks.entries()]; await service.flush(); expect([...h.api.blocks.entries()]).toEqual(before);
+      const before = [...h.api.blocks.entries()]; await service.saveToSiYuan(); expect([...h.api.blocks.entries()]).toEqual(before);
       expect(h.api.calls.some(call => call.path.includes('delete'))).toBe(false);
     } finally { release.resolve(); await h.cleanup(); }
   });
@@ -444,7 +562,7 @@ describe('durable window shutdown and independent input', () => {
     const h = harness(), note = createNote();
     try {
       await h.manager.open(note); const service = h.manager.windows.get(note.id)!.service;
-      await service.edit('saved', 1); await service.flush(); await service.edit('unsaved', 2);
+      await service.edit('saved', 1); await service.saveToSiYuan(); await service.edit('unsaved', 2);
       vi.spyOn(h.drafts, 'remove').mockRejectedValueOnce(new Error('local disk failure'));
       await expect(h.manager.deleteNote(service.note)).rejects.toThrow('local disk failure');
       expect(h.api.blocks.has(note.blockId)).toBe(true); expect(h.values.get(note.id)?.note.text).toBe('unsaved');
@@ -478,7 +596,7 @@ describe('durable window shutdown and independent input', () => {
     try {
       await h.manager.open(note); const service = h.manager.windows.get(note.id)!.service;
       h.request(note.id, 'edit', { text: '', title: '独立标题', revision: 1 });
-      await vi.waitFor(() => expect(service.note.text).toBe('# 独立标题')); await service.flush();
+      await vi.waitFor(() => expect(service.note.text).toBe('# 独立标题')); await service.saveToSiYuan();
       expect(h.api.blocks.get(note.blockId)?.raw).toContain('# 独立标题');
       expect(h.manager.history[0]).toMatchObject({ summary: '# 独立标题' });
       expect(h.manager.history[0].title).toBeUndefined();
@@ -494,7 +612,7 @@ describe('durable window shutdown and independent input', () => {
     const h = harness(), note = createNote(), started = deferred(), release = deferred();
     try {
       await h.manager.open(note); const service = h.manager.windows.get(note.id)!.service;
-      await service.edit('before', 1); await service.flush();
+      await service.edit('before', 1); await service.saveToSiYuan();
       vi.spyOn(h.repo, 'save').mockImplementationOnce(async snapshot => { started.resolve(); await release.promise; snapshot.baseline = 'late response'; });
       h.request(note.id, 'edit', { text: 'saving old', revision: 2 });
       await vi.waitFor(() => expect(service.note.revision).toBe(2));
@@ -541,9 +659,9 @@ describe('durable window shutdown and independent input', () => {
       await vi.waitFor(() => expect(h.messages.some(item => item.resume)).toBe(true));
       expect(h.created[0].destroyed).toBe(false);
       h.writes.mockImplementation(async draft => { h.values.set(draft.note.id, structuredClone(draft)); });
-      await vi.waitFor(() => expect(h.manager.windows.get(note.id)?.service.note.savedRevision).toBe(1));
-      expect(h.api.blocks.get(note.blockId)?.raw).toContain('latest collected input');
-      expect(h.values.has(note.id)).toBe(false);
+      await vi.waitFor(() => expect(h.values.get(note.id)?.note.text).toBe('latest collected input'));
+      expect(h.manager.windows.get(note.id)?.service.phase).toBe('local');
+      expect(h.api.calls).toEqual([]);
     } finally { await h.cleanup(); }
   });
   it('collects unsent input before normal close and saves that exact content', async () => {
@@ -552,20 +670,22 @@ describe('durable window shutdown and independent input', () => {
       await h.manager.open(note); h.snapshots.set(note.id, { text: 'unsent 中文', revision: 1 });
       h.request(note.id, 'close');
       await vi.waitFor(() => expect(h.created[0].destroyed).toBe(true));
-      expect(h.api.blocks.get(note.blockId)?.raw).toContain('unsent 中文');
-      expect(h.values.has(note.id)).toBe(false);
+      expect(h.values.get(note.id)?.note.text).toBe('unsent 中文');
+      expect(h.api.calls).toEqual([]);
     } finally { await h.cleanup(); }
   });
   it('closes normally after a kernel failure while retaining the collected draft', async () => {
     const h = harness(), note = createNote();
     try {
       await h.manager.open(note);
+      const service = h.manager.windows.get(note.id)!.service;
+      await service.edit('initial', 1); await service.saveToSiYuan();
       vi.spyOn(h.repo, 'save').mockRejectedValue(new Error('kernel unavailable'));
-      h.snapshots.set(note.id, { text: 'latest unsent input', revision: 1 });
+      h.snapshots.set(note.id, { text: 'latest unsent input', revision: 2 });
       h.request(note.id, 'close');
       await vi.waitFor(() => expect(h.created[0].destroyed).toBe(true));
       expect(h.values.get(note.id)?.note.text).toBe('latest unsent input');
-      expect(h.values.get(note.id)?.note.savedRevision).toBe(0);
+      expect(h.values.get(note.id)?.note.savedRevision).toBe(1);
       expect(h.report).toHaveBeenCalledWith(expect.stringContaining('已保留本机草稿'));
       expect(h.manager.windows.has(note.id)).toBe(false);
     } finally { await h.cleanup(); }
@@ -574,11 +694,13 @@ describe('durable window shutdown and independent input', () => {
     const h = harness(), note = createNote();
     try {
       await h.manager.open(note);
+      const service = h.manager.windows.get(note.id)!.service;
+      await service.edit('initial', 1); await service.saveToSiYuan();
       vi.spyOn(h.repo, 'save').mockImplementation(async () => {
         h.writes.mockRejectedValue(new Error('disk full'));
         throw new Error('kernel unavailable');
       });
-      h.snapshots.set(note.id, { text: 'keep in window', revision: 1 });
+      h.snapshots.set(note.id, { text: 'keep in window', revision: 2 });
       h.request(note.id, 'close');
       await vi.waitFor(() => expect(h.messages.some(item => item.resume)).toBe(true));
       expect(h.created[0].destroyed).toBe(false);
@@ -616,11 +738,11 @@ describe('durable window shutdown and independent input', () => {
     const h = harness(), note = createNote();
     try {
       await h.manager.open(note); const service = h.manager.windows.get(note.id)!.service;
-      await service.edit('first title\nbody', 1); await service.flush();
+      await service.edit('first title\nbody', 1); await service.saveToSiYuan();
       await vi.waitFor(() => expect(h.persistHistory).toHaveBeenCalledTimes(1));
       for (let revision = 2; revision <= 5; revision++) await service.edit(`unsaved ${revision}`, revision);
       expect(h.persistHistory).toHaveBeenCalledTimes(1);
-      await service.flush(); await vi.waitFor(() => expect(h.persistHistory).toHaveBeenCalledTimes(2));
+      await service.saveToSiYuan(); await vi.waitFor(() => expect(h.persistHistory).toHaveBeenCalledTimes(2));
       expect(h.manager.history[0].summary).toBe('unsaved 5');
       h.request(note.id, 'ready'); await vi.waitFor(() => expect(h.messages.some(item => item.content)).toBe(true));
       expect(h.messages.filter(item => item.state && !item.content).every(item => !JSON.stringify(item).includes('baseline'))).toBe(true);
@@ -636,14 +758,14 @@ describe('durable window shutdown and independent input', () => {
       for (const [index, note] of notes.entries()) {
         await h.manager.open(note);
         const service = h.manager.windows.get(note.id)!.service;
-        await service.edit(`saved ${index}`, 1); await service.flush();
+        await service.edit(`saved ${index}`, 1); await service.saveToSiYuan();
       }
       expect(h.manager.history.map(record => record.id)).toEqual([notes[2].id, notes[1].id]);
       expect(h.api.blocks.size).toBe(3);
       expect(h.values.get(draft.note.id)?.note.text).toBe('recovery only');
       settings.historyLimit = 1;
       const service = h.manager.windows.get(notes[0].id)!.service;
-      await service.edit('old note edited again', 2); await service.flush();
+      await service.edit('old note edited again', 2); await service.saveToSiYuan();
       expect(h.manager.history.map(record => record.id)).toEqual([notes[0].id]);
       expect(h.api.blocks.size).toBe(3);
       expect(h.values.has(draft.note.id)).toBe(true);
@@ -684,7 +806,7 @@ describe('durable window shutdown and independent input', () => {
       await h.manager.initialize();
       expect(h.manager.windows.size).toBe(5);
       expect(h.manager.windows.has(valid[0].id)).toBe(true);
-      expect(h.report).toHaveBeenCalledWith(expect.stringContaining('恢复窗口失败'));
+      expect(h.chooseMissingSource).toHaveBeenCalledOnce();
     } finally { await h.cleanup(); }
   });
   it.each([true, false])('uses draft geometry only as a fallback and respects rememberPosition=%s', async rememberPosition => {

@@ -31,6 +31,13 @@ function setup(platform: DesktopPlatform = 'windows') {
   return { actions, report, remote, adapter, owner, contents };
 }
 describe('independent quick-note tray', () => {
+  it.each(['windows', 'darwin'] as const)('reads the live left-click preference on %s without showing the owner', platform => {
+    const { adapter, actions } = setup(platform); let recent = false;
+    actions.leftClick = () => recent ? actions.recent() : actions.createNote();
+    adapter.start('tray.png', 'Test'); const click = FakeTray.instances[0].handlers.get('click')!;
+    click(); expect(actions.createNote).toHaveBeenCalledOnce(); recent = true; click(); expect(actions.recent).toHaveBeenCalledOnce();
+    expect(actions.showOwner).not.toHaveBeenCalled(); adapter.stop();
+  });
   it('reattaches the Linux menu when an externally destroyed tray is recreated', () => {
     const { adapter } = setup('linux'); adapter.start('tray.png', 'Linux');
     const first = FakeTray.instances[0]; first.destroy();
@@ -159,8 +166,8 @@ describe('independent quick-note tray', () => {
     tray.handlers.get('right-click')!(); const menu = tray.menus[1];
     expect(menu[2].label).toBe('管理速记窗口（1）'); expect(menu[2].submenu[0].label).toBe('A && B');
     menu[2].submenu[0].click(); expect(actions.focusWindow).toHaveBeenCalledWith('new-window');
-    menu[1].click(); expect(actions.showOwner).toHaveBeenCalledOnce(); expect(actions.recent).toHaveBeenCalledOnce();
-    menu[4].click(); expect(actions.settings).toHaveBeenCalledOnce(); adapter.stop();
+    menu[1].click(); expect(actions.showOwner).not.toHaveBeenCalled(); expect(actions.recent).toHaveBeenCalledOnce();
+    menu[4].click(); expect(actions.settings).toHaveBeenCalledOnce(); expect(actions.showOwner).not.toHaveBeenCalled(); adapter.stop();
   });
   it('cleans up idempotently and ignores stale callbacks after reload', () => {
     const { adapter, actions } = setup(); adapter.start('tray.ico', 'Test'); const first = FakeTray.instances[0];

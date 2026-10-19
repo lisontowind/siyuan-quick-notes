@@ -1,20 +1,37 @@
 import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest';
 import type { Request, Response, WindowState } from '../src/types';
-const editor = vi.hoisted(() => ({ text: '', composing: false, enabled: false, changed: () => {}, compositionEnded: () => {} }));
+// Protocol tests isolate visual components; verify-ui exercises the real DOM,
+// overflow, pointer sorting, heading menus and local confirmation dialog.
+vi.mock('../src/window/icons', () => ({ windowIcons() {} }));
+vi.mock('../src/window/toolbar', () => ({ FormatToolbar: class {
+  constructor(_: unknown, run: (action: string) => void) {
+    for (const id of ['bold', 'italic', 'underline', 'strike', 'heading', 'unordered', 'ordered', 'task', 'quote', 'code', 'link', 'image']) {
+      document.getElementById(`format-${id}`)!.addEventListener('click', () => run(id));
+    }
+  }
+  setEnabled(value: boolean) {
+    for (const id of ['bold', 'italic', 'underline', 'strike', 'heading', 'unordered', 'ordered', 'task', 'quote', 'code', 'link', 'image']) document.getElementById(`format-${id}`)!.toggleAttribute('disabled', !value);
+  }
+  close() {} update() {} destroy() {}
+} }));
+const editor = vi.hoisted(() => ({ text: '', composing: false, enabled: false, changed: () => {}, compositionEnded: () => {}, format: vi.fn(), rendering: vi.fn() }));
 vi.mock('../src/window/editor', () => ({ QuickNoteEditor: class {
   constructor(_: unknown, changed: () => void, ended: () => void) { editor.changed = changed; editor.compositionEnded = ended; }
   get composing() { return editor.composing; }
   getText() { return editor.text; } setText(value: string) { editor.text = value; }
   prepareImageInsertion() { return (markdown: string) => { editor.text += `\n${markdown}`; editor.changed(); }; }
   setEditable(value: boolean) { editor.enabled = value; } focus() {} destroy() {}
+  format(value: string) { editor.format(value); } setLiveRendering(value: boolean) { editor.rendering(value); }
 } }));
 class Element {
-  value = ''; disabled = false; readOnly = false;
+  value = ''; disabled = false; readOnly = false; open = false;
+  showModal() { this.open = true; } close() { this.open = false; } select = vi.fn();
   textContent = ''; hidden = false; dataset: Record<string, string> = {}; attributes = new Map<string, string>();
   listeners = new Map<string, (event?: any) => void>();
   children = new Set<Element>(); focus = vi.fn();
   contains(target: Element): boolean { return target === this || this.children.has(target); }
   addEventListener(name: string, listener: (event?: any) => void) { this.listeners.set(name, listener); }
+  removeEventListener(name: string) { this.listeners.delete(name); }
   setAttribute(name: string, value: string) { this.attributes.set(name, value); }
   toggleAttribute(name: string, enabled: boolean) { if (enabled) this.attributes.set(name, ''); else this.attributes.delete(name); }
 }
@@ -32,6 +49,7 @@ function initialize() { response({ state, content: { text: 'saved', revision: 1 
 beforeEach(async () => {
   vi.useFakeTimers(); vi.resetModules(); elements = new Map(); windowListeners = new Map(); documentListeners = new Map();
   Object.assign(editor, { text: '', composing: false, enabled: false });
+  editor.format.mockClear(); editor.rendering.mockClear();
   vi.stubGlobal('location', { search: '?session=s&windowId=w&channel=siyuan-quick-notes:s' });
   vi.stubGlobal('BroadcastChannel', Channel);
   vi.stubGlobal('document', { documentElement: { dataset: {} }, addEventListener: (name: string, listener: (event: any) => void) => documentListeners.set(name, listener), getElementById(id: string) {
@@ -42,6 +60,82 @@ beforeEach(async () => {
 });
 afterEach(() => { windowListeners.get('beforeunload')?.(); vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 describe('renderer close protocol', () => {
+  it('selects callout categories without changing body, ignores stale category state and includes selection in close snapshots', () => {
+    initialize(); const text = editor.text; expect(document.documentElement.dataset.noteKind).toBe('NOTE');
+    elements.get('callout-type')!.listeners.get('click')!(); expect(elements.get('callout-picker')!.hidden).toBe(false);
+    elements.get('callout-warning')!.listeners.get('click')!(); expect(editor.text).toBe(text);
+    expect(document.documentElement.dataset.noteKind).toBe('WARNING'); expect(elements.get('callout-warning')!.attributes.get('aria-checked')).toBe('true');
+    expect(Channel.latest.sent.filter(request => request.action === 'edit').at(-1)).toMatchObject({ text, calloutType: 'WARNING', revision: 2 });
+    response({ state: { ...state, calloutType: 'TIP', revision: 1 } }); expect(document.documentElement.dataset.noteKind).toBe('WARNING');
+    response({ collect: true, requestId: 'snapshot' }); expect(Channel.latest.sent.filter(request => request.action === 'collected').at(-1)?.calloutType).toBe('WARNING');
+    elements.get('callout-caution')!.listeners.get('click')!(); expect(document.documentElement.dataset.noteKind).toBe('WARNING');
+  });
+  it('opens titles with one pencil click while leaving native caption events alone, with menu and F2 alternatives', () => {
+    const title = elements.get('title-display')!, pencil = elements.get('edit-title')!, input = elements.get('note-caption')!;
+    pencil.listeners.get('click')!(); expect(elements.get('title-editor')!.open).toBe(false);
+    initialize(); expect(title.listeners.has('contextmenu')).toBe(false); expect(title.listeners.has('dblclick')).toBe(false);
+    pencil.listeners.get('click')!(); expect(elements.get('title-editor')!.open).toBe(true); expect(pencil.attributes.get('aria-expanded')).toBe('true');
+    input.value = 'still typing'; pencil.listeners.get('click')!(); expect(input.value).toBe('still typing');
+    elements.get('title-cancel')!.listeners.get('click')!(); expect(pencil.attributes.get('aria-expanded')).toBe('false');
+    elements.get('rename-note')!.listeners.get('click')!(); expect(elements.get('title-editor')!.open).toBe(true);
+    elements.get('title-cancel')!.listeners.get('click')!();
+    documentListeners.get('keydown')!({ key: 'F2', preventDefault() {} }); expect(elements.get('title-editor')!.open).toBe(true);
+    expect(Channel.latest.sent.filter(value => value.action === 'edit')).toHaveLength(0);
+  });
+  it('edits a custom title independently, cancels without edits and includes it in close snapshots', () => {
+    initialize(); const text = editor.text;
+    const event = { preventDefault: vi.fn() };
+    elements.get('edit-title')!.listeners.get('click')!(event);
+    expect(elements.get('title-editor')!.open).toBe(true);
+    elements.get('note-caption')!.value = '  新标题 <script>  ';
+    elements.get('title-form')!.listeners.get('submit')!(event);
+    expect(elements.get('title-display')!.textContent).toBe('新标题 <script>'); expect(editor.text).toBe(text);
+    expect(Channel.latest.sent.filter(request => request.action === 'edit').at(-1)).toMatchObject({ text, caption: '新标题 <script>', revision: 2 });
+    response({ state: { ...state, caption: '', revision: 1 } }); expect(elements.get('title-display')!.textContent).toBe('新标题 <script>');
+    elements.get('edit-title')!.listeners.get('click')!({ preventDefault() {} }); elements.get('note-caption')!.value = 'discard';
+    elements.get('title-cancel')!.listeners.get('click')!(); expect(Channel.latest.sent.filter(request => request.action === 'edit')).toHaveLength(1);
+    response({ collect: true, requestId: 'snapshot' });
+    expect(Channel.latest.sent.filter(request => request.action === 'collected').at(-1)).toMatchObject({ caption: '新标题 <script>', text });
+  });
+  it('loads, clears and rejects invalid titles, and does not submit during title composition', () => {
+    response({ state: { ...state, caption: '恢复标题', docTitle: '原文档' }, content: { text: 'saved', revision: 1, caption: '恢复标题' } });
+    expect(elements.get('title-display')!.textContent).toBe('恢复标题');
+    elements.get('edit-title')!.listeners.get('click')!({ preventDefault() {} }); const field = elements.get('note-caption')!, event = { preventDefault: vi.fn() };
+    field.value = 'bad\ntitle'; elements.get('title-form')!.listeners.get('submit')!(event);
+    expect(elements.get('title-error')!.textContent).toContain('单行文本'); expect(Channel.latest.sent.filter(request => request.action === 'edit')).toHaveLength(0);
+    field.value = ''; field.listeners.get('compositionstart')!(); elements.get('title-form')!.listeners.get('submit')!(event);
+    expect(elements.get('title-editor')!.open).toBe(true);
+    field.listeners.get('compositionend')!(); elements.get('title-form')!.listeners.get('submit')!(event);
+    expect(elements.get('title-display')!.textContent).toBe('原文档');
+    expect(Channel.latest.sent.filter(request => request.action === 'edit').at(-1)?.caption).toBe('');
+  });
+  it('shows organization reminders without editing content and routes the snooze action', () => {
+    initialize(); const text = editor.text;
+    response({ cleanupReminder: true }); expect(elements.get('cleanup-reminder')!.hidden).toBe(false);
+    elements.get('cleanup-later')!.listeners.get('click')!();
+    expect(elements.get('cleanup-reminder')!.hidden).toBe(true);
+    expect(Channel.latest.sent.some(request => request.action === 'cleanup-snooze')).toBe(true);
+    expect(editor.text).toBe(text); expect(Channel.latest.sent.filter(request => request.action === 'edit')).toHaveLength(0);
+  });
+  it('offers save before confirmation and open afterwards, including partial first writes', () => {
+    response({ state: { ...state, siyuanSaved: false, phase: 'local' }, content: { text: 'plugin only', revision: 1 } });
+    const open = elements.get('open')!;
+    expect(open.attributes.get('aria-label')).toBe('保存到思源中'); expect(open.attributes.has('disabled')).toBe(false);
+    response({ state: { ...state, siyuanSaved: false, phase: 'saving' } }); expect(open.attributes.has('disabled')).toBe(true);
+    response({ state: { ...state, siyuanSaved: false, phase: 'error' } }); expect(open.attributes.get('aria-label')).toBe('保存到思源中');
+    response({ state: { ...state, siyuanSaved: true } }); expect(open.attributes.get('aria-label')).toBe('在思源中打开');
+  });
+  it('switches source and toolbar without editing text and blocks formatting during IME and collection', () => {
+    initialize(); const text = editor.text;
+    elements.get('render-mode')!.listeners.get('click')!(); expect(editor.rendering).toHaveBeenCalledWith(false);
+    expect(elements.get('render-mode')!.attributes.get('aria-pressed')).toBe('true');
+    elements.get('toolbar-toggle')!.listeners.get('click')!(); expect(elements.get('format-toolbar')!.hidden).toBe(false);
+    expect(editor.text).toBe(text); expect(Channel.latest.sent.filter(request => request.action === 'edit')).toHaveLength(0);
+    editor.composing = true; elements.get('format-bold')!.listeners.get('click')!(); expect(editor.format).not.toHaveBeenCalled();
+    editor.composing = false; elements.get('format-bold')!.listeners.get('click')!(); expect(editor.format).toHaveBeenCalledWith('bold');
+    response({ collect: true, requestId: 'snapshot' }); elements.get('format-bold')!.listeners.get('click')!(); expect(editor.format).toHaveBeenCalledTimes(1);
+    expect(elements.get('format-bold')!.attributes.has('disabled')).toBe(true);
+  });
   it('uses English for runtime state, reload confirmation, and disconnect warnings without changing note text', async () => {
     document.documentElement.lang = 'en-US';
     response({ state: { ...state, docTitle: '我的中文标题', showSaved: true }, content: { text: '正文保持原样', revision: 1 } });

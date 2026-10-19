@@ -1,15 +1,26 @@
-import type { Draft, Geometry, NoteRecord, NoteReference, Request, Response, Settings, WindowState, WindowRecoveryState } from '../types';
+import type { Draft, Geometry, MissingSourceChoice, NoteRecord, NoteReference, Request, Response, Settings, WindowState, WindowRecoveryState } from '../types';
 import type { DesktopAdapter, NativeWindow } from '../platform/desktop';
 import { LocalDraftStore } from '../platform/drafts';
-import { NoteRepository } from '../services/repository';
+import { MissingSourceError, NoteRepository } from '../services/repository';
 import { AutoSaveService, message } from '../services/autosave';
-import { createNote, noteReference, noteLabel } from './identity';
+import { createNote, noteReference, noteLabel, noteSummary, isSavedToSiYuan, isEmptyNewNote } from './identity';
 import { SerialQueue, TriggerGate } from './serial';
 import { validRequest } from './protocol';
 import { ImageUploadService } from '../services/images';
 import { hostLocale } from './i18n';
+import { parseToolbarLayout, type ToolbarLayout } from './toolbar';
 
-export type HistoryRecord = NoteReference & { summary?: string };
+export interface WindowSync {
+  layout(): ToolbarLayout;
+  saveLayout(layout: ToolbarLayout): Promise<void>;
+  deleted(id: string): boolean;
+  remove(id: string): Promise<void>;
+  busy?(id: string): boolean;
+  organize?(): void;
+  snooze?(): Promise<void>;
+}
+
+export type HistoryRecord = NoteReference & { summary?: string; bodySummary?: string };
 export interface WindowEntry { native?: NativeWindow; service: AutoSaveService; geometry: Geometry; lastFocus: number; closing: boolean }
 export class QuickNoteWindowManager {
   readonly windows = new Map<string, WindowEntry>();
@@ -37,19 +48,21 @@ export class QuickNoteWindowManager {
     private openDoc: (id: string) => void, private showRecent: () => void,
     private confirmDelete: () => Promise<boolean> = async () => false,
     private externalWindowCount: () => number = () => 0,
-    private images = new ImageUploadService(), private windowListChanged: () => void = () => {}) {
+    private images = new ImageUploadService(), private windowListChanged: () => void = () => {}, private sync?: WindowSync,
+    private chooseMissingSource?: (note: NoteReference, parent?: NativeWindow) => Promise<MissingSourceChoice>) {
     this.channelName = `siyuan-quick-notes:${this.session}`;
     this.channel = new BroadcastChannel(this.channelName);
     this.channel.onmessage = event => {
       if (!this.active || !validRequest(event.data, this.session) || !this.windows.has(event.data.windowId)) return;
       const req: Request = event.data;
+      if (req.action === 'open' && this.windows.get(req.windowId)?.closing) return;
       // Input, heartbeat, and durable close acknowledgements must not wait for kernel I/O.
       const immediate = ['edit', 'ready', 'heartbeat', 'collected', 'close', 'close-draft', 'upload-images'].includes(req.action);
       if (this.tearingDown && !['edit', 'heartbeat', 'collected', 'ready'].includes(req.action)) return;
       const work = immediate ? this.handle(req) : this.incoming.run(req.windowId, () => this.handle(req));
       void work.catch(error => {
         const entry = this.windows.get(req.windowId);
-        if (entry) { entry.service.error = message(error); entry.service.phase = 'error'; this.publish(req.windowId, req.requestId); }
+        if (entry) { entry.service.error = message(error); if (entry.service.phase !== 'conflict') entry.service.phase = 'error'; this.publish(req.windowId, req.requestId); }
         this.report(message(error));
       });
     };
@@ -64,7 +77,6 @@ export class QuickNoteWindowManager {
     catch (error) { this.report(`窗口状态读取失败：${message(error)}`); }
     const drafts = await this.drafts.list();
     for (const warning of this.drafts.warnings) this.report(warning);
-    if (drafts.length) this.report(`发现 ${drafts.length} 条本机恢复草稿，请从“最近速记与恢复草稿”打开`);
     if (this.settings().restoreWindows) {
       const candidates = new Map<string, { id: string; updatedAt: number; draft?: Draft; history?: HistoryRecord }>();
       for (const item of this.history) if (this.geometries[item.id]?.open) candidates.set(item.id, { ...item, history: item });
@@ -76,9 +88,11 @@ export class QuickNoteWindowManager {
         if (geometry?.open) candidates.set(draft.note.id, { id: draft.note.id, updatedAt: draft.note.updatedAt, draft });
       }
       for (const item of [...candidates.values()].sort((a, b) => b.updatedAt - a.updatedAt)) {
+        if (this.sync?.deleted(item.id)) continue;
         if (!this.active || this.tearingDown || this.openWindowCount() >= this.settings().maxWindows) break;
         try {
           const draft = item.draft ?? drafts.find(d => d.note.id === item.id);
+          if ((draft?.variants?.length ?? 0) > 1) continue;
           if (draft) await this.open(draft.note, draft.geometry);
           else if (item.history) await this.reopen(item.history);
         } catch (error) { this.report(`恢复窗口失败：${message(error)}`); }
@@ -96,6 +110,7 @@ export class QuickNoteWindowManager {
     await this.open(createNote());
   }
   async open(note: NoteRecord, restored?: Geometry, persistDraft = false): Promise<void> {
+    if (this.sync?.busy?.(note.id)) throw new Error('整理任务正在处理这条便签，请稍后重试');
     if (!this.active || this.tearingDown || this.deleting.has(note.id)) return;
     if (this.windows.has(note.id)) { await this.pending.get(note.id); this.focus(note.id); return; }
     if (this.openWindowCount() >= this.settings().maxWindows) { this.report('已达到窗口数量上限，请先关闭一个窗口'); return; }
@@ -108,6 +123,7 @@ export class QuickNoteWindowManager {
     const entry: WindowEntry = { geometry, lastFocus: Date.now(), closing: false, service: undefined as unknown as AutoSaveService };
     entry.service = new AutoSaveService(structuredClone(note), this.repo, this.drafts, () => this.settings().debounceMs,
       () => this.publish(note.id), () => this.bounds(entry), saved => this.record(saved));
+    if (this.sync?.deleted(note.id)) entry.service.markRemoved();
     this.windows.set(note.id, entry);
     const work = (async () => {
       const url = new URL(`/plugins/siyuan-quick-notes/window.html`, location.origin);
@@ -131,13 +147,19 @@ export class QuickNoteWindowManager {
         });
         entry.native.webContents.on('will-navigate', (event: { preventDefault(): void }) => event.preventDefault());
         entry.native.webContents.on('new-window', (event: { preventDefault(): void }) => event.preventDefault());
-        this.focus(note.id); this.publish(note.id); this.scheduleState();
+        this.focus(note.id); this.publish(note.id); this.record(entry.service.note); this.scheduleState();
       } catch (error) { entry.service.dispose(); this.windows.delete(note.id); this.notifyWindowList(); throw error; }
     })();
     this.pending.set(note.id, work);
     try { await work; } finally { this.pending.delete(note.id); }
   }
   private openWindowCount(): number { return this.windows.size + this.externalWindowCount(); }
+  isBusy(id: string): boolean { return this.deleting.has(id) || this.pending.has(id) || this.uploading.has(id); }
+  showCleanupReminder(): boolean {
+    const entry = [...this.windows.entries()].filter(([, value]) => !value.closing).sort((a, b) => b[1].lastFocus - a[1].lastFocus)[0];
+    if (!entry) return false;
+    this.send({ windowId: entry[0], cleanupReminder: true }); return true;
+  }
   private bounds(entry: WindowEntry): Geometry {
     if (!entry.native || entry.native.isDestroyed()) return entry.geometry;
     try { return this.adapter.geometry(entry.native); } catch { return entry.geometry; }
@@ -155,9 +177,10 @@ export class QuickNoteWindowManager {
     const entry = this.windows.get(id); if (!entry) return;
     const note = entry.service.note;
     const state: WindowState = { revision: note.revision, savedRevision: note.savedRevision, docId: note.docId,
-      title: noteLabel(note, 40, '新速记'), docTitle: note.docTitle || note.docPath?.split('/').pop() || note.target?.path.split('/').pop(), phase: entry.service.phase, error: entry.service.error,
-      localRevision: entry.service.localRevision, pinned: this.bounds(entry).pinned, dark: this.dark, showSaved: this.settings().showSaved };
-    this.send({ windowId: id, requestId, state, ...(content ? { content: { text: note.text, revision: note.revision } } : {}) });
+      title: noteLabel(note, 40, '新速记'), caption: note.caption ?? '', calloutType: note.calloutType ?? 'NOTE', docTitle: note.docTitle || note.docPath?.split('/').pop() || note.target?.path.split('/').pop(), phase: entry.service.phase, error: entry.service.error,
+      localRevision: entry.service.localRevision, pinned: this.bounds(entry).pinned, dark: this.dark, showSaved: this.settings().showSaved, removed: entry.service.removed };
+    state.siyuanSaved = isSavedToSiYuan(note);
+    this.send({ windowId: id, requestId, state, toolbarLayout: this.sync?.layout() ?? parseToolbarLayout(undefined), ...(content ? { content: { text: note.text, revision: note.revision, caption: note.caption, calloutType: note.calloutType } } : {}) });
     this.notifyWindowList();
   }
   private notifyWindowList(): void {
@@ -172,7 +195,17 @@ export class QuickNoteWindowManager {
     const entry = this.windows.get(req.windowId); if (!entry || !this.active) return;
     if (this.tearingDown && !['edit', 'ready', 'heartbeat', 'collected'].includes(req.action)) return;
     const service = entry.service;
+    if (service.removed && ['save', 'open', 'reload', 'upload-images'].includes(req.action)) { this.publish(req.windowId, req.requestId); return; }
     switch (req.action) {
+      case 'save-toolbar': {
+        try {
+          if (!this.sync) throw new Error('工具栏设置暂不可用');
+          await this.sync.saveLayout(req.toolbarLayout!); this.publish(req.windowId, req.requestId); this.refresh();
+        } catch (error) {
+          this.send({ windowId: req.windowId, requestId: req.requestId, toolbarError: message(error), toolbarLayout: this.sync?.layout() ?? parseToolbarLayout(undefined) });
+        }
+        return;
+      }
       case 'upload-images': {
         if (entry.closing || this.uploading.has(req.windowId)) {
           this.send({ windowId: req.windowId, requestId: req.requestId, imageUpload: { error: '窗口忙碌，请稍后重试' } }); return;
@@ -194,7 +227,7 @@ export class QuickNoteWindowManager {
       case 'collected': await this.acceptCollection(req); return;
       case 'edit': {
         const id = req.windowId, requestId = req.requestId;
-        void service.edit(req.text!, req.revision!, true, req.title).then(() => this.publish(id, requestId)).catch(error => this.report(message(error)));
+        void service.edit(req.text!, req.revision!, true, req.title, req.caption, req.calloutType).then(() => this.publish(id, requestId)).catch(error => this.report(message(error)));
         return;
       }
       case 'save': await service.flush(); break;
@@ -209,8 +242,10 @@ export class QuickNoteWindowManager {
         catch (error) { this.report(`当前桌面环境无法最小化：${message(error)}`); }
         break;
       case 'new': await this.open(createNote()); break;
-      case 'open': if (await service.flush() && service.note.docId) this.openDoc(service.note.docId); break;
+      case 'open': await this.siYuan(req.windowId); break;
       case 'recent': this.showRecent(); break;
+      case 'cleanup': this.sync?.organize?.(); break;
+      case 'cleanup-snooze': await this.sync?.snooze?.(); break;
       case 'reload': {
         if (entry.closing) break;
         entry.closing = true; service.pause();
@@ -219,7 +254,7 @@ export class QuickNoteWindowManager {
         break;
       }
       case 'copy-note': {
-        const copy = createNote(); copy.text = service.note.text; copy.revision = 1;
+        const copy = createNote(); copy.text = service.note.text; copy.caption = service.note.caption; copy.calloutType = service.note.calloutType; copy.revision = 1;
         await this.open(copy, undefined, true); break;
       }
     }
@@ -238,14 +273,43 @@ export class QuickNoteWindowManager {
       this.send({ windowId: id, requestId, collect: true });
     });
   }
+  async siYuan(id: string): Promise<void> {
+    const entry = this.windows.get(id);
+    if (!entry || !this.active || this.tearingDown || entry.closing || this.deleting.has(id) || this.uploading.has(id)) throw new Error('窗口忙碌，请稍后重试');
+    entry.closing = true; entry.service.pause();
+    try {
+      if (!await this.collect(id)) throw new Error(entry.service.error || '最新草稿未确认落盘');
+      const linked = isSavedToSiYuan(entry.service.note);
+      if (linked) {
+        try { await entry.service.assertSource(); }
+        catch (error) {
+          if (!(error instanceof MissingSourceError) || !this.chooseMissingSource) throw error;
+          const choice = await this.chooseMissingSource(entry.service.note, entry.native);
+          if (!this.active || this.tearingDown) return;
+          if (choice === 'delete') { entry.closing = false; await this.deleteNote(entry.service.note, true); }
+          if (choice === 'restore') {
+            if (!await entry.service.restoreToSiYuan()) throw new Error(entry.service.error || '保存未确认');
+            if (entry.service.note.docId) this.openDoc(entry.service.note.docId);
+          }
+          return;
+        }
+      }
+      if (!await entry.service.saveToSiYuan()) throw new Error(entry.service.error || '保存未确认');
+      if (linked && entry.service.note.docId) this.openDoc(entry.service.note.docId);
+    } finally {
+      if (!this.tearingDown) { entry.closing = false; entry.service.resume(); this.send({ windowId: id, resume: true }); }
+    }
+  }
   private async acceptCollection(req: Request): Promise<void> {
     const pending = this.collections.get(req.windowId), entry = this.windows.get(req.windowId);
     if (!pending || pending.requestId !== req.requestId || !entry) return;
     let safe = false;
     if (req.error) { entry.service.error = req.error; entry.service.phase = 'error'; }
     else if (req.revision! >= entry.service.note.revision && (req.revision !== entry.service.note.revision
-      || (req.text === entry.service.note.text && (req.title === undefined || req.title === (entry.service.note.title ?? ''))))) {
-      const edit = entry.service.edit(req.text!, req.revision!, false, req.title);
+      || (req.text === entry.service.note.text && (req.title === undefined || req.title === (entry.service.note.title ?? ''))
+        && (req.caption === undefined || req.caption === (entry.service.note.caption ?? ''))
+        && (req.calloutType === undefined || req.calloutType === (entry.service.note.calloutType ?? 'NOTE'))))) {
+      const edit = entry.service.edit(req.text!, req.revision!, false, req.title, req.caption, req.calloutType);
       safe = await entry.service.closeToDraft(); await edit;
     } else { entry.service.error = '窗口内容版本不一致，已保留窗口'; entry.service.phase = 'error'; }
     // Timeout may already have resolved the collection. A late acknowledgement cannot close a window.
@@ -259,12 +323,15 @@ export class QuickNoteWindowManager {
     entry.closing = true; entry.service.pause();
     try {
       if (!await this.collect(id)) return;
+      if (isEmptyNewNote(entry.service.note)) {
+        await entry.service.delete(); await this.finishClose(id, false); await this.forgetNote(id); return;
+      }
       if (draftOnly) await entry.service.cleanSavedDraft();
       else if (!await entry.service.flush()) {
         // A kernel error must not trap the user in a window. Reconfirm the latest
         // recovery metadata after the attempted save, then close with a draft.
         if (!await entry.service.closeToDraft()) return;
-        this.report('未保存到思源，已保留本机草稿。可从“最近速记与恢复草稿”继续。');
+        this.report('未保存到思源，已保留本机草稿。可从“速记列表”继续。');
       }
       if (!this.tearingDown) await this.finishClose(id);
     } finally {
@@ -281,13 +348,14 @@ export class QuickNoteWindowManager {
     if (persist) await this.persistState();
   }
   private record(note: NoteRecord): void {
-    if (!note.docId || note.savedRevision <= 0) return;
-    const record: HistoryRecord = { ...noteReference(note), summary: noteLabel(note) };
+    if (!isSavedToSiYuan(note) || note.savedRevision <= 0 || this.sync?.deleted(note.id)) return;
+    const record: HistoryRecord = { ...noteReference(note), summary: noteLabel(note), bodySummary: noteSummary(note.text, 120, '') };
     this.scheduleState();
     const index = this.history.findIndex(item => item.id === note.id);
-    if (index >= 0 && this.history[index].updatedAt === record.updatedAt && this.history[index].summary === record.summary) return;
+    if (index >= 0 && this.history[index].updatedAt === record.updatedAt && this.history[index].summary === record.summary && this.history[index].bodySummary === record.bodySummary) return;
     if (index >= 0) this.history.splice(index, 1);
     this.history.unshift(record); this.history.splice(this.settings().historyLimit);
+    this.notifyWindowList();
     void this.metadataQueue.run('history', () => this.persistHistory([...this.history])).catch(error => this.report(`最近列表保存失败：${message(error)}`));
   }
   private scheduleState(): void { if (!this.active || this.tearingDown) return; clearTimeout(this.stateTimer); this.stateTimer = setTimeout(() => { void this.persistState().catch(error => this.report(message(error))); }, 250); }
@@ -297,14 +365,39 @@ export class QuickNoteWindowManager {
     await this.drafts.saveWindowState(this.geometries);
   }
   async reopen(item: HistoryRecord): Promise<void> {
+    if (this.sync?.busy?.(item.id)) throw new Error('整理任务正在处理这条便签，请稍后重试');
     if (this.windows.has(item.id)) { this.focus(item.id); return; }
     const draft = (await this.drafts.list()).find(d => d.note.id === item.id);
-    if (draft) { await this.open(draft.note, draft.geometry); return; }
-    const note = await this.repo.reload({ ...item, text: '', revision: 0, savedRevision: 0 });
-    await this.open(note);
+    if ((draft?.variants?.length ?? 0) > 1) throw new Error('草稿存在多个版本，请从速记列表选择版本或另存');
+    if (draft && !isSavedToSiYuan(draft.note)) { await this.open(draft.note, draft.geometry); return; }
+    if (this.sync?.deleted(item.id)) throw new Error('这条速记已从插件移除，当前内容已保留，可复制或另存为新速记。');
+    try {
+      if (draft) { await this.repo.assertSource(draft.note); await this.open(draft.note, draft.geometry); return; }
+      const backup = await this.drafts.readBackup?.(item.id);
+      const note = await this.repo.reload({ ...item, text: backup?.note.text ?? '', baseline: backup?.note.baseline,
+        draftSync: await this.drafts.savedContext?.(item.id) ?? backup?.note.draftSync, revision: 0, savedRevision: 0 });
+      await this.drafts.backup?.({ note });
+      await this.open(note);
+    } catch (error) {
+      if (!(error instanceof MissingSourceError) || !this.chooseMissingSource) throw error;
+      const choice = await this.chooseMissingSource(item);
+      if (!this.active || this.tearingDown) return;
+      if (choice === 'delete') { await this.deleteNote(item, true); return; }
+      if (choice !== 'restore') return;
+      const local = draft ?? await this.drafts.readBackup?.(item.id);
+      if (!local) throw new Error('没有可用的插件正文副本，无法恢复。请从思源历史或回收站恢复。');
+      if (this.sync?.deleted(item.id)) throw new Error('速记已从插件移除');
+      const service = new AutoSaveService(local.note, this.repo, this.drafts, () => this.settings().debounceMs, () => {},
+        () => local.geometry ?? { width: this.settings().width, height: this.settings().height, pinned: false }, saved => this.record(saved));
+      try {
+        if (!await service.restoreToSiYuan()) throw new Error(service.error || '保存未确认');
+        await this.open(service.note, local.geometry);
+      } finally { service.dispose(); }
+    }
   }
   async recoveryDrafts(): Promise<Draft[]> { return this.drafts.list(); }
-  async deleteNote(item: HistoryRecord): Promise<boolean> {
+  async deleteNote(item: HistoryRecord, confirmed = false): Promise<boolean> {
+    if (this.sync?.busy?.(item.id)) throw new Error('整理任务正在处理这条便签，请稍后重试');
     if (!this.active || this.tearingDown || this.deleting.has(item.id)) return false;
     const entry = this.windows.get(item.id);
     if (entry?.closing) return false;
@@ -312,15 +405,18 @@ export class QuickNoteWindowManager {
     let completed: (() => void) | undefined, work: Promise<void> | undefined;
     this.deleting.add(item.id);
     try {
-      if (pinned && entry) this.setPinned(entry, false);
-      if (!await this.confirmDelete() || this.tearingDown || !this.active) return false;
+      if (pinned && entry && !confirmed) this.setPinned(entry, false);
+      if ((!confirmed && !await this.confirmDelete()) || this.tearingDown || !this.active) return false;
       work = new Promise<void>(resolve => { completed = resolve; }); this.deletionWork.add(work);
       if (entry) {
         entry.closing = true; entry.service.pause();
         if (!await this.collect(item.id)) return false;
+        await this.sync?.remove(item.id);
         await entry.service.delete();
       } else {
+        await this.sync?.remove(item.id);
         await this.drafts.remove(item.id);
+        await this.drafts.removeBackup?.(item.id);
       }
       if (entry) await this.finishClose(item.id, false);
       await this.forgetNote(item.id);
@@ -329,7 +425,8 @@ export class QuickNoteWindowManager {
       completed?.(); if (work) this.deletionWork.delete(work);
       this.deleting.delete(item.id);
       if (entry && this.windows.has(item.id) && !this.tearingDown) {
-        if (pinned) this.setPinned(entry, true);
+        if (this.sync?.deleted(item.id)) entry.service.markRemoved();
+        if (pinned && !confirmed) this.setPinned(entry, true);
         entry.closing = false; entry.service.resume(); this.send({ windowId: item.id, resume: true });
       }
     }
@@ -340,14 +437,18 @@ export class QuickNoteWindowManager {
     await this.metadataQueue.run('history', () => this.persistHistory([...this.history])).catch(error => this.report(`速记已删除，最近列表落盘失败：${message(error)}`));
     delete this.geometries[id];
     await this.persistState();
+    this.notifyWindowList();
   }
   refresh(): void { for (const id of this.windows.keys()) this.publish(id); }
+  applyDeletions(): void {
+    for (const [id, entry] of this.windows) if (this.sync?.deleted(id) && !entry.service.removed) entry.service.markRemoved();
+  }
   dispose(): Promise<void> { return this.disposal ??= this.stop(); }
   private async stop(): Promise<void> {
     if (!this.active) return;
     this.tearingDown = true;
     clearTimeout(this.stateTimer); clearInterval(this.themeTimer);
-    for (const entry of this.windows.values()) entry.service.pause();
+    for (const entry of this.windows.values()) { entry.service.pause(); }
     const safeToClose = new Set<string>();
     // SiYuan gives onunload five seconds. Release the session and close handlers
     // before that deadline even if native creation, disk I/O or deletion stalls.
@@ -363,6 +464,9 @@ export class QuickNoteWindowManager {
         entry.closing = true;
         const safe = await this.collect(id);
         if (!this.active) return;
+        if (safe && isEmptyNewNote(entry.service.note)) {
+          await entry.service.delete(); await this.finishClose(id, false); await this.forgetNote(id); return;
+        }
         if (safe) { safeToClose.add(id); await entry.service.cleanSavedDraft(); }
         entry.service.dispose();
       }));

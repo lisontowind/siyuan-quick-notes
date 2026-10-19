@@ -48,19 +48,13 @@ export class ImagePreviewWidget extends WidgetType {
     const caption = document.createElement('figcaption');
     const message = document.createElement('span');
     message.textContent = t('图片加载中…'); message.setAttribute('role', 'status');
-    const edit = document.createElement('button');
-    edit.type = 'button'; edit.textContent = t('编辑图片链接');
-    edit.addEventListener('click', () => {
-      view.dispatch({ selection: { anchor: this.image.from, head: this.image.to }, scrollIntoView: true });
-      view.focus();
-    });
     image.addEventListener('load', () => { message.textContent = this.image.alt || t('图片'); view.requestMeasure(); });
     image.addEventListener('error', () => {
       image.hidden = true; message.textContent = t('图片无法加载，请检查资源或链接');
       figure.dataset.failed = 'true'; view.requestMeasure();
     });
     image.src = this.image.src;
-    caption.append(message, edit); figure.append(image, caption);
+    caption.append(message); figure.append(image, caption);
     return figure;
   }
   get estimatedHeight(): number { return 160; }

@@ -8,22 +8,35 @@ vi.mock('siyuan', () => ({
   Plugin: class { saveData = vi.fn(); loadData = vi.fn(); name = 'siyuan-quick-notes'; commands: any[] = []; app = {};
     addCommand(command: any) { this.commands.push(command); } addTopBar = vi.fn(); },
   Setting: class { items: any[] = []; constructor(public options: any) { host.panels.push(this); } addItem(item: any) { this.items.push(item); } open() {} },
-  Dialog: class { element = { querySelector: () => new Element() }; constructor() { host.dialogs.push(this); } destroy() {} },
+  Dialog: class {
+    elements = new Map<string, Element>();
+    element = { querySelector: (selector: string) => {
+      if (!this.elements.has(selector)) this.elements.set(selector, new Element()); return this.elements.get(selector)!;
+    }, querySelectorAll: () => [] };
+    constructor(public options: any) { host.dialogs.push(this); }
+    destroy = vi.fn(() => this.options.destroyCallback?.());
+  },
   Menu: class {}, getFrontend: () => host.frontend, getBackend: () => host.backend, showMessage: host.showMessage,
   openTab: vi.fn(), openWindow: vi.fn(), openSetting: vi.fn(), confirm: vi.fn(),
 }));
 import QuickNotesPlugin from '../src/index';
+import { openTab, openWindow } from 'siyuan';
 import { AutoSaveService } from '../src/services/autosave';
 import { NoteRepository } from '../src/services/repository';
 import { defaults } from '../src/core/settings';
 import { createNote } from '../src/core/identity';
 import { FakeKernel } from './fake-kernel';
+import { SharedDraftStore } from '../src/platform/shared-drafts';
+import { SharedNoteStore } from '../src/platform/shared-notes';
+import { LocalDraftStore } from '../src/platform/drafts';
 import type { Draft, DraftStore } from '../src/types';
 
 class Element {
   type = ''; value = ''; checked = false; textContent = ''; className = ''; children: any[] = []; onclick?: () => void;
   dataset: Record<string, string> = {}; classList = { add() {} }; listeners = new Map<string, () => void>();
   setAttribute() {} append(...children: any[]) { this.children.push(...children); } add() {}
+  before(..._children: any[]) {}
+  after(..._children: any[]) {}
   addEventListener(name: string, callback: () => void) { this.listeners.set(name, callback); }
 }
 class Input extends Element {}
@@ -33,7 +46,7 @@ class MemoryDrafts implements DraftStore {
 beforeEach(() => {
   host.panels.length = 0; host.dialogs.length = 0; host.showMessage.mockClear();
   host.frontend = 'desktop'; host.backend = 'windows';
-  vi.stubGlobal('document', { createElement: (tag: string) => tag === 'input' ? new Input() : new Element(), documentElement: { getAttribute: () => 'light' } });
+  vi.stubGlobal('document', { createElementNS: () => new Element(), createElement: (tag: string) => tag === 'input' ? new Input() : new Element(), documentElement: { getAttribute: () => 'light' } });
   vi.stubGlobal('HTMLInputElement', Input); vi.stubGlobal('Option', class {});
   vi.stubGlobal('location', { origin: 'http://localhost:16818' });
 });
@@ -49,6 +62,172 @@ function commit(panel: any, directoryValue: string) {
   directory.value = directoryValue; directory.listeners.get('input')(); panel.options.confirmCallback();
 }
 describe('plugin settings and stored history integration', () => {
+  it('only copies foreign drafts to a fresh local identity, preserving the source and avoiding duplicate copies on retry', async () => {
+    const { plugin, api } = setup(), root = await fs.mkdtemp(path.join(tmpdir(), 'sqn-choices-')), device = crypto.randomUUID();
+    try {
+      plugin.sharedDrafts = new SharedDraftStore(fs, path, path.join(root, 'shared', 'drafts'), device);
+      plugin.drafts = new LocalDraftStore(fs, path, path.join(root, 'drafts', device), plugin.sharedDrafts);
+      const remote = new LocalDraftStore(fs, path, path.join(root, 'drafts', crypto.randomUUID()));
+      const original = { ...createNote(), text: 'foreign pending body', caption: '外机便签标题', calloutType: 'CAUTION' as const, revision: 2, savedRevision: 1, siyuanSaved: true,
+        docId: '20261010000000-doc0001', baseline: 'original', target: { notebook: api.notebook, path: '/Foreign' } };
+      await remote.write({ note: original, geometry: { width: 800, height: 600, pinned: true, open: true } });
+      const source = await fs.readFile(path.join(remote.directory, `${original.id}.json`), 'utf8');
+      plugin.manager = { windows: new Map(), open: vi.fn().mockRejectedValueOnce(new Error('window failed')).mockResolvedValue(undefined) };
+      expect(await plugin.drafts.list()).toEqual([]);
+      const data = await plugin.draftVersions(), selected = data.versions[0];
+      await expect(plugin.chooseDraftVersion(undefined, selected.version, data.token, false)).rejects.toThrow('仅供查看');
+      await expect(plugin.chooseDraftVersion(undefined, selected.version, 'forged', true)).rejects.toThrow('版本已变化');
+      await expect(plugin.chooseDraftVersion(original.id, selected.version, data.token, true)).rejects.toThrow('版本已变化');
+      await expect(plugin.chooseDraftVersion(undefined, selected.version, data.token, true)).rejects.toThrow('window failed');
+      await plugin.chooseDraftVersion(undefined, selected.version, data.token, true);
+      await expect(plugin.chooseDraftVersion(undefined, crypto.randomUUID(), data.token, true)).rejects.toThrow('版本已变化');
+      const drafts = await plugin.drafts.list(); expect(drafts).toHaveLength(1);
+      const copied = drafts[0]; expect(copied.note.text).toBe(original.text); expect(copied.note.caption).toBe(original.caption); expect(copied.note.calloutType).toBe(original.calloutType);
+      expect(copied.note.id).not.toBe(original.id); expect(copied.note.blockId).not.toBe(original.blockId);
+      expect(copied.note).toMatchObject({ siyuanSaved: false, savedRevision: 0, revision: 1 });
+      for (const field of ['docId', 'target', 'baseline', 'draftSync']) expect(copied.note[field]).toBeUndefined();
+      expect(copied.geometry).toBeUndefined(); expect(plugin.manager.open).toHaveBeenLastCalledWith(copied.note);
+      expect(await fs.readFile(path.join(remote.directory, `${original.id}.json`), 'utf8')).toBe(source);
+      expect(api.calls).toEqual([]);
+    } finally { await fs.rm(root, { recursive: true, force: true }); }
+  });
+  it.each(['changed', 'removed'])('rejects stale foreign draft previews when the source is %s', async change => {
+    const { plugin } = setup(), root = await fs.mkdtemp(path.join(tmpdir(), 'sqn-stale-'));
+    try {
+      plugin.drafts = new LocalDraftStore(fs, path, path.join(root, 'drafts', crypto.randomUUID()));
+      const remote = new LocalDraftStore(fs, path, path.join(root, 'drafts', crypto.randomUUID()));
+      const original = { ...createNote(), text: 'before', revision: 1 }; await remote.write({ note: original });
+      plugin.manager = { windows: new Map(), open: vi.fn() };
+      const data = await plugin.draftVersions();
+      if (change === 'changed') await remote.write({ note: { ...original, text: 'after', revision: 2 } }); else await remote.remove(original.id);
+      await expect(plugin.chooseDraftVersion(undefined, data.versions[0].version, data.token, true)).rejects.toThrow('版本已变化');
+      expect(await plugin.drafts.list()).toEqual([]); expect(plugin.manager.open).not.toHaveBeenCalled();
+    } finally { await fs.rm(root, { recursive: true, force: true }); }
+  });
+  it.each([[0, 'restore'], [1, 'delete'], [2, 'cancel']] as const)('offers a parented native deletion dialog and maps button %i to %s', async (response, choice) => {
+    const { plugin } = setup(), parent = { id: 'recent' };
+    const showMessageBox = vi.fn().mockResolvedValue({ response });
+    plugin.remote = { dialog: { showMessageBox } }; plugin.recentWindow = { nativeWindow: parent };
+    expect(await plugin.chooseMissingSource(createNote())).toBe(choice);
+    expect(showMessageBox).toHaveBeenCalledWith(parent, expect.objectContaining({
+      message: '思源中已删除，是否删除便签或恢复到思源？', buttons: ['恢复到思源', '删除便签', '取消'], defaultId: 2, cancelId: 2,
+    }));
+  });
+  it('restores a deleted original from the list using the full plugin copy after all editors closed', async () => {
+    const { plugin, api } = setup(), note = { ...createNote(), text: 'full local copy\n\nnot just summary', revision: 1 };
+    const values = new Map<string, Draft>([[note.id, { note }]]), backups = new Map<string, Draft>();
+    plugin.drafts = { list: async () => [...values.values()], write: async (draft: Draft) => { values.set(draft.note.id, structuredClone(draft)); },
+      remove: async (id: string) => { values.delete(id); }, backup: async (draft: Draft) => { backups.set(draft.note.id, structuredClone(draft)); }, readBackup: async (id: string) => backups.get(id) };
+    plugin.saveData.mockResolvedValue({ code: 0 });
+    await plugin.siYuanRecent(note.id); expect(values.size).toBe(0); expect(backups.size).toBe(1);
+    api.blocks.delete(note.blockId); api.docs.clear(); plugin.chooseMissingSource = vi.fn().mockResolvedValue('restore');
+    await plugin.siYuanRecent(note.id);
+    expect(plugin.chooseMissingSource).toHaveBeenCalledOnce(); expect(api.blocks.get(note.blockId)?.raw).toContain('not just summary');
+    await plugin.historyWrites.run('history', async () => {});
+  });
+  it('does not recover from a summary when an old saved note has no local body copy', async () => {
+    const { plugin } = setup(), item = { ...createNote(), docId: '20261010000000-doc0001', siyuanSaved: true, summary: 'only summary' };
+    plugin.drafts = { list: async () => [] }; plugin.historyValue = [item]; plugin.chooseMissingSource = vi.fn().mockResolvedValue('restore');
+    await expect(plugin.siYuanRecent(item.id)).rejects.toThrow('没有可用的插件正文副本');
+  });
+  it('removes blank fallback notes on close without creating a document', async () => {
+    const { plugin, api } = setup(), values = new Map<string, Draft>();
+    plugin.drafts = { write: async (draft: Draft) => { values.set(draft.note.id, structuredClone(draft)); }, remove: async (id: string) => { values.delete(id); },
+      list: async () => [...values.values()], loadWindowState: async () => ({}), saveWindowState: vi.fn().mockResolvedValue(undefined) };
+    plugin.fallback(); const dialog = host.dialogs.at(-1), entry = [...plugin.fallbackServices.values()][0] as any;
+    const keep = dialog.element.querySelector('[data-keep-draft]');
+    entry.input.value = ' \n\t'; const id = entry.service.note.id;
+    keep.onclick(); await vi.waitFor(() => expect(dialog.destroy).toHaveBeenCalled());
+    expect(values.has(id)).toBe(false); expect(api.calls).toEqual([]); expect(plugin.fallbackServices.size).toBe(0);
+  });
+  it('saves a closed plugin note from the list without opening an editor and opens SiYuan only on the next click', async () => {
+    const { plugin, api } = setup(), note = { ...createNote(), text: 'closed plugin content', revision: 1 };
+    const values = new Map<string, Draft>([[note.id, { note }]]);
+    plugin.drafts = { list: async () => [...values.values()], write: async (draft: Draft) => { values.set(draft.note.id, structuredClone(draft)); }, remove: async (id: string) => { values.delete(id); } };
+    plugin.saveData.mockResolvedValue({ code: 0 }); vi.mocked(openTab).mockClear();
+    plugin.manager = { windows: new Map(), open: vi.fn() };
+    await plugin.siYuanRecent(note.id);
+    expect(plugin.manager.open).not.toHaveBeenCalled(); expect(openTab).not.toHaveBeenCalled();
+    expect(api.blocks.get(note.blockId)?.raw).toContain('closed plugin content'); expect(values.has(note.id)).toBe(false);
+    expect(plugin.historyValue[0]).toMatchObject({ id: note.id, siyuanSaved: true });
+    await plugin.siYuanRecent(note.id); expect(openTab).toHaveBeenCalledOnce(); expect(api.docs.size).toBe(1);
+    await plugin.historyWrites.run('history', async () => {});
+  });
+  it('preserves closed plugin notes and a save action after a failed first SiYuan write', async () => {
+    const { plugin, api } = setup(), note = { ...createNote(), text: 'retain on failure', revision: 1 };
+    const values = new Map<string, Draft>([[note.id, { note }]]);
+    plugin.drafts = { list: async () => [...values.values()], write: async (draft: Draft) => { values.set(draft.note.id, structuredClone(draft)); }, remove: async (id: string) => { values.delete(id); } };
+    plugin.saveData.mockResolvedValue({ code: 0 }); api.fail = '/api/block/appendBlock';
+    await expect(plugin.siYuanRecent(note.id)).rejects.toThrow();
+    expect(values.get(note.id)?.note).toMatchObject({ text: note.text, siyuanSaved: false }); expect(plugin.historyValue).toEqual([]);
+    api.fail = undefined; await plugin.siYuanRecent(note.id);
+    expect(api.docs.size).toBe(1); expect(plugin.historyValue[0].siyuanSaved).toBe(true);
+    await plugin.historyWrites.run('history', async () => {});
+  });
+  it('routes a list SiYuan action through an already open native editor', async () => {
+    const { plugin } = setup(), note = createNote();
+    plugin.drafts = new MemoryDrafts();
+    plugin.manager = { windows: new Map([[note.id, {}]]), siYuan: vi.fn().mockResolvedValue(undefined) };
+    await plugin.siYuanRecent(note.id); expect(plugin.manager.siYuan).toHaveBeenCalledWith(note.id);
+  });
+  it('uses the same save-first behavior in the fallback editor and syncs later edits', async () => {
+    const { plugin, api } = setup(); plugin.drafts = new MemoryDrafts(); plugin.saveData.mockResolvedValue({ code: 0 });
+    vi.mocked(openWindow).mockClear(); plugin.fallback();
+    const entry = [...plugin.fallbackServices.values()][0] as any;
+    try {
+      entry.input.value = 'latest fallback input'; await plugin.siYuanRecent(entry.service.note.id);
+      expect(entry.service.note.siyuanSaved).toBe(true); expect(openWindow).not.toHaveBeenCalled();
+      expect(api.blocks.get(entry.service.note.blockId)?.raw).toContain('latest fallback input');
+      entry.input.value = 'updated fallback'; entry.input.oninput(); await entry.service.flush();
+      expect(api.blocks.get(entry.service.note.blockId)?.raw).toContain('updated fallback');
+      await plugin.siYuanRecent(entry.service.note.id); expect(openWindow).toHaveBeenCalledOnce();
+      await plugin.historyWrites.run('history', async () => {});
+    } finally { entry.service.dispose(); }
+  });
+  it('applies synced settings and deletions without writing data back or replacing the history array', async () => {
+    const { plugin } = setup(), history = plugin.historyValue;
+    const note = { ...createNote(), docId: '20261010000000-doc0001', summary: 'synced' };
+    const removed = crypto.randomUUID(), markRemoved = vi.fn();
+    plugin.shared = { load: vi.fn().mockResolvedValue({ records: [note], deleted: new Set([removed]) }) };
+    plugin.fallbackServices.set({}, { service: { note: { id: removed }, markRemoved } });
+    plugin.manager = { refresh: vi.fn(), applyDeletions: vi.fn() }; plugin.recentWindow = { settingsChanged: vi.fn(), refresh: vi.fn() }; plugin.syncTray = vi.fn();
+    const order = [...plugin.toolbarLayout.order].reverse();
+    plugin.loadData.mockImplementation(async (name: string) => name === 'settings.json' ? { ...defaults, debounceMs: 1500 } : { order });
+    await plugin.onDataChanged(); await plugin.onDataChanged();
+    expect(plugin.settingsValue.debounceMs).toBe(1500); expect(plugin.toolbarLayout.order).toEqual(order);
+    expect(plugin.historyValue).toBe(history); expect(plugin.historyValue[0].summary).toBe('synced');
+    expect(markRemoved).toHaveBeenCalled(); expect(plugin.manager.applyDeletions).toHaveBeenCalled();
+    expect(plugin.recentWindow.settingsChanged).toHaveBeenCalled(); expect(plugin.saveData).not.toHaveBeenCalled();
+  });
+  it('persists toolbar separately and retains the last accepted layout on a rejected write', async () => {
+    const { plugin } = setup(), previous = plugin.toolbarLayout;
+    const next = { order: [...previous.order].reverse() };
+    plugin.saveData.mockResolvedValueOnce({ code: -1, msg: 'disk locked' });
+    await expect(plugin.saveToolbar(next)).rejects.toThrow('disk locked'); expect(plugin.toolbarLayout).toBe(previous);
+    plugin.saveData.mockResolvedValueOnce({ code: 0 }); await plugin.saveToolbar(next);
+    expect(plugin.toolbarLayout).toEqual(next); expect(plugin.saveData).toHaveBeenLastCalledWith('toolbar.json', next);
+    expect(plugin.settingsValue.directory).toBe('/Original');
+  });
+  it('routes the list shortcut before note limits and native-window fallback', async () => {
+    const { plugin } = setup(); plugin.settingsValue.shortcutBehavior = 'list'; plugin.settingsValue.maxWindows = 1;
+    plugin.manager = { windows: new Map([['full', {}]]), trigger: vi.fn() }; plugin.showRecent = vi.fn(); plugin.fallback = vi.fn();
+    await plugin.newNote(true); expect(plugin.showRecent).toHaveBeenCalledOnce(); expect(plugin.manager.trigger).not.toHaveBeenCalled();
+    plugin.manager = undefined; await plugin.newNote(true); expect(plugin.showRecent).toHaveBeenCalledTimes(2); expect(plugin.fallback).not.toHaveBeenCalled();
+  });
+  it('opens settings inside the existing recent window and keeps the host panel only as a fallback', async () => {
+    const { plugin } = setup(); plugin.recentWindow = { show: vi.fn().mockResolvedValue(undefined) };
+    await plugin.openSettingsPanel(); expect(plugin.recentWindow.show).toHaveBeenCalledWith('settings'); expect(host.panels).toHaveLength(0);
+    plugin.recentWindow.show.mockRejectedValueOnce(new Error('native unavailable'));
+    await plugin.openSettingsPanel(); expect(host.panels).toHaveLength(1);
+  });
+  it('routes recent entries to the independent window without waking the owner and falls back on creation failure', async () => {
+    const { plugin } = setup(), owner = { isDestroyed: () => false, isMinimized: () => true, restore: vi.fn(), show: vi.fn(), focus: vi.fn() };
+    plugin.remote = { getCurrentWindow: () => owner }; plugin.recentWindow = { show: vi.fn().mockResolvedValue(undefined), refresh: vi.fn() };
+    plugin.showRecentFallback = vi.fn();
+    await plugin.showRecent(); expect(plugin.recentWindow.show).toHaveBeenCalledOnce(); expect(owner.show).not.toHaveBeenCalled(); expect(plugin.showRecentFallback).not.toHaveBeenCalled();
+    plugin.recentWindow.show.mockRejectedValue(new Error('native unavailable'));
+    await plugin.showRecent(); expect(owner.restore).toHaveBeenCalledOnce(); expect(owner.show).toHaveBeenCalledOnce(); expect(plugin.showRecentFallback).toHaveBeenCalledOnce();
+  });
   it.each([
     ['windows', 'win32', 'tray.ico', 'Ctrl + Alt + N'],
     ['darwin', 'darwin', 'trayTemplate.png', 'Option + Command + N'],
@@ -143,12 +322,12 @@ describe('plugin settings and stored history integration', () => {
     plugin.confirmDelete = vi.fn().mockResolvedValue(true); plugin.saveData.mockResolvedValue({ code: 0 });
     const service = new AutoSaveService(createNote(), plugin.repository, plugin.drafts, () => 10000, () => {}, () => ({ width: 320, height: 320, pinned: false }), saved => plugin.recordFallback(saved));
     try {
-      await service.edit('正式正文', 1, false, '便签标题'); await service.flush();
+      await service.edit('正式正文', 1, false, '便签标题'); await service.saveToSiYuan();
       await service.edit('未保存修改', 2, false, '待删除标题');
       const note = service.note; states[note.id] = { note };
       const dialog = { destroy: vi.fn() };
       plugin.fallbackServices.set(dialog, { service, input: { value: note.text }, titleInput: { value: note.title }, status: {} });
-      if (nativeManager) plugin.manager = { deleteNote: vi.fn(), forgetNote: vi.fn().mockResolvedValue(undefined) };
+      if (nativeManager) plugin.manager = { windows: new Map(), deleteNote: vi.fn(), forgetNote: vi.fn().mockResolvedValue(undefined) };
       const before = [...api.blocks.entries()], callCount = api.calls.length;
       expect(await plugin.deleteRecent(note)).toBe(true);
       expect([...api.blocks.entries()]).toEqual(before); expect(api.calls).toHaveLength(callCount);
@@ -197,7 +376,7 @@ describe('plugin settings and stored history integration', () => {
     try {
       await service.edit('during settings write', 1); reject(new Error('settings disk failure'));
       await vi.waitFor(() => expect(host.showMessage).toHaveBeenCalledWith(expect.stringContaining('设置未保存'), 7000, 'error'));
-      await service.flush(); expect([...api.docs.keys()][0]).toMatch(/^\/Original\//);
+      await service.saveToSiYuan(); expect([...api.docs.keys()][0]).toMatch(/^\/Original\//);
       expect(plugin.settingsValue.directory).toBe('/Original');
     } finally { service.dispose(); }
   });

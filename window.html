@@ -10,25 +10,69 @@
 </head>
 <body>
   <header class="toolbar">
-    <span id="title-display" title="拖动移动窗口">新速记</span>
-    <button id="new" title="新建速记" aria-label="新建速记"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
-    <button id="open" title="在思源打开" aria-label="在思源打开"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10"/></svg></button>
+    <span id="title-display" title="拖动移动窗口，点击铅笔修改标题">新速记</span>
+    <button id="edit-title" title="修改标题" aria-label="修改标题" aria-haspopup="dialog" aria-controls="title-editor" aria-expanded="false" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m16 3 5 5-12 12-6 1 1-6Z"/><path d="m14 5 5 5M4 15l5 5"/></svg></button>
     <button id="pin" title="置顶" aria-label="置顶" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4h8l-1 6 4 4H5l4-4-1-6ZM12 14v6"/></svg></button>
     <button id="more" title="更多" aria-label="更多" aria-expanded="false" aria-controls="actions"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></button>
     <button id="minimize" title="最小化" aria-label="最小化"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/></svg></button>
     <button id="close" title="关闭" aria-label="关闭"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
   </header>
+  <aside id="cleanup-reminder" class="note-cleanup-reminder" role="status" hidden><span>便签已达到整理提醒条数</span><div><button id="cleanup-open">整理便签</button><button id="cleanup-later">7 天后再提醒</button><button id="cleanup-dismiss" aria-label="关闭提醒">×</button></div></aside>
   <div id="actions" hidden>
+    <button id="rename-note">修改标题</button>
     <button id="insert-image" disabled>插入图片… / 截图可直接粘贴</button>
     <button id="save">立即保存 / 重试</button>
     <button id="reload">重新载入原文</button>
     <button id="copy-note">另存为新速记</button>
-    <button id="close-draft">保存本机草稿后关闭</button>
-    <button id="recent">最近速记与恢复草稿</button>
+    <button id="close-draft">保存草稿后关闭</button>
+    <button id="recent">速记列表</button>
     <button id="delete" class="danger">删除这条速记…</button>
   </div>
   <main id="editor" aria-label="Markdown 速记"></main>
+  <div id="format-toolbar" role="toolbar" aria-label="格式工具栏" hidden>
+    <button id="format-bold" title="加粗" aria-label="加粗"><b>B</b></button>
+    <button id="format-italic" title="斜体" aria-label="斜体"><i>I</i></button>
+    <button id="format-underline" title="下划线" aria-label="下划线"><u>U</u></button>
+    <button id="format-strike" title="删除线" aria-label="删除线"><s>S</s></button>
+    <button id="format-heading" title="标题" aria-label="标题">H₂</button>
+    <button id="format-unordered" title="无序列表" aria-label="无序列表">•≡</button>
+    <button id="format-ordered" title="有序列表" aria-label="有序列表">1≡</button>
+    <button id="format-task" title="待办" aria-label="待办">☑</button>
+    <button id="format-quote" title="引用" aria-label="引用">❞</button>
+    <button id="format-code" title="行内代码" aria-label="行内代码">&lt;&gt;</button>
+    <button id="format-link" title="链接" aria-label="链接"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 14 4-4M8 16l-1 1a4 4 0 0 1-6-6l5-5a4 4 0 0 1 6 0m0 2 1-1a4 4 0 0 1 6 6l-5 5a4 4 0 0 1-6 0"/></svg></button>
+    <button id="format-image" title="插入图片" aria-label="插入图片"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 6-6 4 4 3-3 5 5"/></svg></button>
+  </div>
+  <dialog id="title-editor" aria-labelledby="title-editor-label">
+    <form id="title-form">
+      <h2 id="title-editor-label">修改标题</h2>
+      <input id="note-caption" type="text" maxlength="200" aria-label="便签标题" placeholder="留空使用默认标题" autocomplete="off">
+      <p>标题将显示在思源提示块顶部，思源文档名保持不变。</p>
+      <p id="title-error" role="alert"></p>
+      <div class="title-editor-actions"><button id="title-cancel" type="button">取消</button><button type="submit">保存</button></div>
+    </form>
+  </dialog>
+  <form id="link-editor" hidden>
+    <input id="link-url" type="url" placeholder="https://" aria-label="链接地址" required>
+    <button type="submit" title="应用链接" aria-label="应用链接">应用</button><button id="link-cancel" type="button">取消</button>
+  </form>
   <input id="image-picker" type="file" multiple hidden aria-label="选择图片">
-  <footer id="status" role="status" aria-live="polite">连接中…</footer>
+  <nav id="callout-picker" role="menu" aria-label="提示块类别" hidden>
+    <button id="callout-note" role="menuitemradio" aria-checked="true" data-kind="NOTE"><span class="callout-swatch"></span>NOTE · 笔记</button>
+    <button id="callout-tip" role="menuitemradio" aria-checked="false" data-kind="TIP"><span class="callout-swatch"></span>TIP · 技巧</button>
+    <button id="callout-important" role="menuitemradio" aria-checked="false" data-kind="IMPORTANT"><span class="callout-swatch"></span>IMPORTANT · 重要</button>
+    <button id="callout-warning" role="menuitemradio" aria-checked="false" data-kind="WARNING"><span class="callout-swatch"></span>WARNING · 警告</button>
+    <button id="callout-caution" role="menuitemradio" aria-checked="false" data-kind="CAUTION"><span class="callout-swatch"></span>CAUTION · 注意</button>
+  </nav>
+  <footer id="footer">
+    <span id="status" role="status" aria-live="polite">连接中…</span>
+    <div class="footer-actions">
+      <button id="render-mode" title="显示源码" aria-label="显示源码" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 6-6 6 6 6m8-12 6 6-6 6M14 3l-4 18"/></svg></button>
+      <button id="toolbar-toggle" title="显示工具栏" aria-label="显示工具栏" aria-expanded="false" aria-controls="format-toolbar"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 9h2m3 0h2m3 0h1M7 13h2m3 0h2M7 16h10"/></svg></button>
+      <button id="callout-type" title="提示块类别" aria-label="提示块类别" aria-haspopup="menu" aria-expanded="false" aria-controls="callout-picker"></button>
+      <button id="new" title="新建速记" aria-label="新建速记"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+      <button id="open" title="保存到思源中" aria-label="保存到思源中"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10"/></svg></button>
+    </div>
+  </footer>
 </body>
 </html>

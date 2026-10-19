@@ -16,6 +16,10 @@
 
 ## 功能说明配图
 
+2026-10-20：0.1.28 重做中英文六组操作图（各 1800×1140）：便签与工具栏、图片、保存位置、独立列表、整理便签、其他设备草稿。所有窗口、设置、列表与对话框均来自当前 `dist/` 的真实本地化页面，使用隔离的模拟通信提供确定的样例数据；不连接或修改思源工作空间。各图已检查文字、操作位置及控件布局。英文题头 `00-header.png` 沿用已有素材。
+
+当前生成入口为 `node --preserve-symlinks scripts/render-docs.mjs` 和 `node --preserve-symlinks scripts/render-docs.mjs --lang=en`，在构建后执行；此处 `--preserve-symlinks` 用于兼容本机捆绑依赖。可设置 `DOCS_PLAYWRIGHT`、`DOCS_CHROMIUM` 与 `DOCS_SHARP` 指定离线依赖，图像仍按 quality 85 的 PNG 调色板参数优化。`scripts/docs-en.mjs` 保存中英文图解文案，截图脚本检查页面错误及右侧文字高度。当前说明图采用固定提交链接，图片不打入插件包。以下为此前版本的制图记录。
+
 2026-10-18 增加英文说明 `README_en_US.md` 与 `docs/images/en/` 下的五张配图：`00-header.png` 为英文题头图，其余四张对应便签操作、图片插入、保存位置和恢复列表。英文题头图用 HTML/CSS 排版并引用现有插件图标；两张便签配图直接使用主窗口的真实英文界面，不在截图后替换文字。设置与恢复列表仍为关键项示意，明确标注译文。五张英文图与中文操作图一样，先发布到仓库，再在 README 中引用固定提交 SHA 的 GitHub Raw 公开链接。构建排除整个 `docs/images/` 目录，源图仍保留用于重新制图。
 
 英文图生成命令为 `node scripts/render-docs.mjs --lang=en`，先构建当前窗口代码。沿用下述 `DOCS_PLAYWRIGHT`、`DOCS_CHROMIUM` 环境变量；可选 `DOCS_SHARP` 指向 Sharp 模块，启用 PNG 调色板优化（quality 85、dither 0、compressionLevel 9、effort 10）。四张操作图为 1680×915，题头图为 1200×480。安装包校验检查中英文 README 中说明图使用固定提交链接、对应本地源图存在，并禁止 `docs/images/` 下的图片进入安装包。无需新增插件构建或运行依赖。

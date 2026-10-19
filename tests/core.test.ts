@@ -3,8 +3,14 @@ import { parseSettings } from '../src/core/settings';
 import { SerialQueue, TriggerGate } from '../src/core/serial';
 import { validRequest } from '../src/core/protocol';
 import { assertPluginWrite } from '../src/services/plugin-data';
+import { toolbarActions } from '../src/core/toolbar';
 
 describe('configuration and coordination', () => {
+  it('validates complete toolbar permutations in the authenticated window protocol', () => {
+    const request = { session: 's', windowId: 'w', requestId: 'r', action: 'save-toolbar', toolbarLayout: { order: [...toolbarActions].reverse() } };
+    expect(validRequest(request, 's')).toBe(true); expect(validRequest(request, 'other')).toBe(false);
+    for (const order of [undefined, [], ['bold'], [...toolbarActions, 'bold']]) expect(validRequest({ ...request, toolbarLayout: { order } }, 's')).toBe(false);
+  });
   it('does not report settings saved when Plugin.saveData resolves a failed envelope', () => {
     expect(() => assertPluginWrite({ code: 0, data: null })).not.toThrow();
     expect(() => assertPluginWrite({ code: -1, msg: 'disk error' })).toThrow('disk error');
@@ -12,6 +18,11 @@ describe('configuration and coordination', () => {
   });
   it('normalizes persisted settings and rejects unsafe paths', () => {
     expect(parseSettings(null).width).toBe(320);
+    expect(parseSettings(null).trayClickAction).toBe('new');
+    expect(parseSettings({ shortcutBehavior: 'list' }).shortcutBehavior).toBe('list');
+    expect(parseSettings({ shortcutBehavior: 'recent' }).shortcutBehavior).toBe('recent');
+    expect(parseSettings({ trayClickAction: 'recent' }).trayClickAction).toBe('recent');
+    expect(parseSettings({ trayClickAction: 'invalid' }).trayClickAction).toBe('new');
     const result = parseSettings({ width: -2, height: Infinity, directory: '/../escape', debounceMs: 0, maxWindows: 2 });
     expect(result.width).toBe(300); expect(result.height).toBe(320); expect(result.directory).toBe('/闪念速记/{{now | date "20060102150405"}}');
     expect(parseSettings(null).directory).toBe('/闪念速记/{{now | date "20060102150405"}}');
@@ -52,7 +63,9 @@ describe('configuration and coordination', () => {
     expect(validRequest({ ...request, action: 'collected', text: undefined, revision: undefined, error: 'IME not ready' }, 'one')).toBe(true);
     expect(validRequest({ ...request, action: 'collected', text: undefined }, 'one')).toBe(false);
     expect(validRequest({ ...request, action: 'collected', text: 'x'.repeat(2_000_001) }, 'one')).toBe(false);
-    expect(validRequest({ ...request, title: '中文标题' }, 'one')).toBe(true);
+    expect(validRequest({ ...request, title: '中文标题', caption: '便签标题', calloutType: 'TIP' }, 'one')).toBe(true);
+    for (const calloutType of ['tip', '', 'invalid', 12, { type: 'NOTE' }]) expect(validRequest({ ...request, calloutType }, 'one')).toBe(false);
+    for (const caption of [123, 'x'.repeat(201), 'two\nlines', 'bad\u0000value']) expect(validRequest({ ...request, caption }, 'one')).toBe(false);
     expect(validRequest({ ...request, title: 123 }, 'one')).toBe(false);
     expect(validRequest({ ...request, title: 'x'.repeat(201) }, 'one')).toBe(false);
     expect(validRequest({ ...request, title: 'two\nlines' }, 'one')).toBe(false);

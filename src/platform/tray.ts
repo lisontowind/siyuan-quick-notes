@@ -3,6 +3,7 @@ import type { DesktopPlatform } from './runtime';
 
 export interface TrayWindowItem { id: string; label: string }
 export interface TrayActions {
+  leftClick?(): void | Promise<void>;
   createNote(): void | Promise<void>;
   recent(): void | Promise<void>;
   settings(): void | Promise<void>;
@@ -67,7 +68,7 @@ export class TrayAdapter {
         // a note when the desktop activates the icon to display its menu.
         this.updateMenu();
       } else {
-        tray.on('click', this.run(epoch, () => this.actions.createNote()));
+        tray.on('click', this.run(epoch, () => this.actions.leftClick ? this.actions.leftClick() : this.actions.createNote()));
         tray.on('right-click', this.run(epoch, () => {
           tray.popUpContextMenu(this.buildMenu(this.actions.windows()));
         }));
@@ -85,7 +86,7 @@ export class TrayAdapter {
     const run = (action: () => void | Promise<void>) => this.run(this.epoch, action);
     const menu: MenuItem[] = [
       { label: '新建闪念速记', click: run(() => this.actions.createNote()) },
-      { label: '最近速记与恢复草稿', click: run(() => { this.actions.showOwner(); return this.actions.recent(); }) },
+      { label: '速记列表', click: run(() => this.actions.recent()) },
       { label: `管理速记窗口（${windows.length}）`, submenu: windows.length ? windows.map(item => ({
         // Electron treats & as a mnemonic marker. Escape user-derived titles.
         label: item.label.replaceAll('&', '&&'), click: run(() => {
@@ -93,7 +94,7 @@ export class TrayAdapter {
         }),
       })) : [{ label: '当前没有速记窗口', enabled: false }] },
       { type: 'separator' },
-      { label: '速记设置', click: run(() => { this.actions.showOwner(); return this.actions.settings(); }) },
+      { label: '速记设置', click: run(() => this.actions.settings()) },
       { label: '关闭托盘图标', click: run(() => this.actions.closeTray()) },
     ];
     return this.remote.Menu.buildFromTemplate(menu);

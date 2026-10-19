@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN"><head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'none'; img-src 'self'; base-uri 'none'; form-action 'none'">
+  <title>速记列表</title><link rel="stylesheet" href="recent.css"><script src="recent.js" defer></script>
+</head><body>
+  <header class="toolbar">
+    <button id="back" title="返回速记列表" aria-label="返回速记列表" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 6-6 6 6 6M8 12h12"/></svg></button>
+    <span id="title-display">速记列表</span>
+    <button id="new" title="新建速记" aria-label="新建速记"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+    <button id="more" title="更多" aria-label="更多" aria-haspopup="menu" aria-expanded="false" aria-controls="actions" disabled></button>
+    <button id="pin" title="置顶" aria-label="置顶" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4h8l-1 6 4 4H5l4-4-1-6ZM12 14v6"/></svg></button>
+    <button id="settings" title="设置" aria-label="设置" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 3-.5 3-2 .9L4 6l-2 3 2.3 2v2L2 15l2 3 2.5-.9 2 .9.5 3h4l.5-3 2-.9 2.5.9 2-3-2.3-2v-2L20 9l-2-3-2.5.9-2-.9L13 3Z"/><circle cx="11" cy="12" r="3"/></svg></button>
+    <button id="minimize" title="最小化" aria-label="最小化"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/></svg></button>
+    <button id="close" title="关闭" aria-label="关闭"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+  </header>
+  <nav id="actions" role="menu" aria-label="更多" hidden>
+    <button id="other-devices" role="menuitem" disabled>其他设备草稿</button>
+    <button id="organize" role="menuitem" disabled>整理便签</button>
+  </nav>
+  <section id="notes-panel" aria-label="速记列表">
+    <div class="recent-search"><input id="search" type="search" aria-label="搜索速记" placeholder="搜索摘要、保存位置或时间"><button id="refresh">刷新</button></div>
+    <main id="results" aria-label="速记列表"></main>
+  </section>
+  <section id="settings-panel" aria-label="设置" hidden></section>
+  <section id="cleanup-panel" aria-label="整理便签" hidden></section>
+  <footer id="recent-footer">
+    <div class="recent-footer-row"><span id="cleanup-summary"></span><button id="cleanup-snooze" hidden disabled>7 天后再提醒</button></div>
+    <div id="recent-status" role="status">连接中…</div>
+  </footer>
+</body></html>

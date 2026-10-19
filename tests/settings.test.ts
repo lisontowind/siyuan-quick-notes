@@ -8,6 +8,7 @@ vi.mock('siyuan', () => ({ Setting: class {
 } }));
 import { createSettings } from '../src/components/settings';
 import { defaults } from '../src/core/settings';
+import { validateSettingsDraft } from '../src/core/settings';
 import { NoteRepository } from '../src/services/repository';
 import { createNote } from '../src/core/identity';
 import { FakeKernel } from './fake-kernel';
@@ -41,6 +42,12 @@ function setup() {
 }
 
 describe('settings validation and destination preview', () => {
+  it('validates window settings against available notebooks and rejects malformed payloads before storage', () => {
+    expect(validateSettingsDraft({ ...defaults, notebook: 'available' }, ['available']).notebook).toBe('available');
+    expect(() => validateSettingsDraft({ ...defaults, notebook: 'closed' }, ['available'])).toThrow('普通笔记本');
+    expect(() => validateSettingsDraft({ ...defaults, notebook: 'available', directory: '/../bad' }, ['available'])).toThrow('保存目录无效');
+    expect(() => validateSettingsDraft({ ...defaults, notebook: 'available', width: '320' }, ['available'])).toThrow('设置格式无效');
+  });
   it('shows a default cap of ten and saves a user limit as low as one', async () => {
     const h = setup();
     const limit = h.panel.items.find(item => item.title === '最多同时打开的便签')!.actionElement;

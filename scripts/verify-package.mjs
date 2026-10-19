@@ -19,7 +19,7 @@ for (const [field, maxBytes] of [['icon', 64 * 1024], ['preview', 512 * 1024]]) 
   assert(files[name]?.length && files[name].length <= maxBytes, `${name} exceeds marketplace image size limit`);
 }
 assert(files['preview.png'].length <= 128 * 1024, 'preview.png exceeds the 128 KiB package budget');
-for (const file of ['index.js', 'index.css', 'window.js', 'window.css', 'window.html', 'README.md', 'README_en_US.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'docs/testing.md', 'docs/feasibility.md', 'docs/development.md', 'icon.png', 'preview.png', 'tray.ico', 'tray.png', 'trayTemplate.png', 'trayTemplate@2x.png', 'tray-lifetime.cjs']) {
+for (const file of ['index.js', 'index.css', 'window.js', 'window.css', 'window.html', 'recent.js', 'recent.css', 'recent.html', 'README.md', 'README_en_US.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'docs/testing.md', 'docs/feasibility.md', 'docs/development.md', 'icon.png', 'preview.png', 'tray.ico', 'tray.png', 'trayTemplate.png', 'trayTemplate@2x.png', 'tray-lifetime.cjs']) {
   assert(files[file]?.length, `Missing ${file}`);
   assert.deepEqual(Buffer.from(files[file]), await readFile(`dist/${file}`), `Archive differs from dist: ${file}`);
 }
@@ -81,10 +81,14 @@ for (let i = 0; i < 3; i++) {
 for (const file of Object.keys(files)) assert(!file.startsWith('/') && !file.includes('..') && !file.includes('node_modules'), `Unsafe entry: ${file}`);
 new Script(strFromU8(files['index.js']));
 new Script(strFromU8(files['window.js']));
+new Script(strFromU8(files['recent.js']));
 new Script(strFromU8(files['tray-lifetime.cjs']));
 assert.match(strFromU8(files['index.js']), /require\(["']siyuan["']\)/);
 assert.match(strFromU8(files['index.js']), /module\.exports\s*=/);
 assert(!/\brequire\(/.test(strFromU8(files['window.js'])), 'Window bundle must not require Node modules');
+assert(!/\brequire\(/.test(strFromU8(files['recent.js'])), 'Recent bundle must not require Node modules');
+const recentHtml = strFromU8(files['recent.html']);
+assert.match(recentHtml, /Content-Security-Policy/); assert.match(recentHtml, /src="recent\.js"/); assert.match(recentHtml, /href="recent\.css"/);
 const html = strFromU8(files['window.html']);
 assert.match(html, /Content-Security-Policy/);
 assert.match(html, /src="window\.js"/);

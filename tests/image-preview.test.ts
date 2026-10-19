@@ -50,7 +50,7 @@ describe('inline image preview', () => {
     expect(state.doc.toString()).toBe('![image](assets/a.png)');
     expect(collectImagePreviews(state)[0].alt).toBe('image');
   });
-  it('renders text safely, measures loaded images, reports failure and selects the source for editing', () => {
+  it('renders text safely and reports failures without a source-reveal button', () => {
     class Element {
       className = ''; contentEditable = ''; textContent = ''; alt = ''; src = ''; loading = ''; decoding = ''; hidden = false;
       dataset: Record<string, string> = {}; children: Element[] = []; listeners = new Map<string, () => void>();
@@ -63,14 +63,13 @@ describe('inline image preview', () => {
     const description = { from: 1, to: 20, lineEnd: 20, src: '/assets/test.png', alt: '<script>literal</script>' };
     const widget = new ImagePreviewWidget(description);
     const figure = widget.toDOM({ dispatch, focus, requestMeasure } as unknown as EditorView) as unknown as Element;
-    const [image, caption] = figure.children, [message, edit] = caption.children;
+    const [image, caption] = figure.children, [message] = caption.children;
     expect(image.src).toBe('/assets/test.png'); expect(image.alt).toBe('<script>literal</script>');
     expect(message.textContent).toContain('加载中');
     image.listeners.get('load')!(); expect(message.textContent).toBe('<script>literal</script>');
     image.listeners.get('error')!(); expect(image.hidden).toBe(true); expect(message.textContent).toContain('无法加载');
     expect(requestMeasure).toHaveBeenCalledTimes(2);
-    edit.listeners.get('click')!(); expect(dispatch).toHaveBeenCalledWith({ selection: { anchor: 1, head: 20 }, scrollIntoView: true });
-    expect(focus).toHaveBeenCalledOnce();
+    expect(caption.children).toHaveLength(1); expect(dispatch).not.toHaveBeenCalled(); expect(focus).not.toHaveBeenCalled();
     expect(widget.eq(new ImagePreviewWidget({ ...description }))).toBe(true);
     expect(widget.eq(new ImagePreviewWidget({ ...description, from: 2 }))).toBe(false);
   });

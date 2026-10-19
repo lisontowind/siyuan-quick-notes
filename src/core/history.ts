@@ -9,7 +9,8 @@ export function parseHistory(value: unknown, limit: number): HistoryRecord[] {
     if (!validNoteReference(item) || records.has(item.id)) continue;
     const summary = (item as HistoryRecord).summary;
     records.set(item.id, { ...noteReference(item),
-      ...(typeof summary === 'string' ? { summary: noteSummary(summary, 80, '') } : {}) });
+      ...(typeof summary === 'string' ? { summary: noteSummary(summary, 80, '') } : {}),
+      ...(typeof (item as HistoryRecord).bodySummary === 'string' ? { bodySummary: noteSummary((item as HistoryRecord).bodySummary!, 120, '') } : {}) });
     if (records.size >= limit) break;
   }
   return [...records.values()];

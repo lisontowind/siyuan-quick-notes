@@ -14,6 +14,14 @@ describe('stored history validation', () => {
     expect(parseHistory([...malformed, valid, another], 2).map(item => item.id)).toEqual([valid.id, another.id]);
     expect(parseHistory({}, 20)).toEqual([]);
   });
+  it('retains a bounded body preview independently of the display title, without persisting full text', () => {
+    const note = { ...record(), caption: '显示标题', summary: '显示标题', bodySummary: '正文'.repeat(100) + '\n下一行', text: '完整私密正文' };
+    const result = parseHistory([note], 1)[0];
+    expect(result.caption).toBe('显示标题'); expect(result.bodySummary).toBe('正文'.repeat(60));
+    expect(result).not.toHaveProperty('text');
+    expect(parseHistory([{ ...note, bodySummary: '' }], 1)[0].bodySummary).toBe('');
+    expect(parseHistory([{ ...note, bodySummary: 123 }], 1)[0]).not.toHaveProperty('bodySummary');
+  });
   it('deduplicates, supports legacy records, and only retains display metadata', () => {
     const valid = record(), legacy = { ...record(), target: undefined, summary: { invalid: true } };
     const result = parseHistory([{ ...valid, summary: '# Title\nprivate body' }, valid, legacy], 20);

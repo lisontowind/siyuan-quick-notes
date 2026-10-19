@@ -15,7 +15,12 @@ await build({ configFile: false, publicDir: false, build: {
   lib: { entry: resolve('src/window/main.ts'), formats: ['iife'], name: 'QuickNotesWindow', fileName: () => 'window.js' },
   rollupOptions: { output: { assetFileNames: 'window.[ext]' } },
 }});
-for (const name of ['plugin.json', 'README.md', 'README_en_US.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'window.html', 'icon.png', 'preview.png']) {
+await build({ configFile: false, publicDir: false, build: {
+  outDir: 'dist', emptyOutDir: false, target: 'es2022',
+  lib: { entry: resolve('src/window/recent.ts'), formats: ['iife'], name: 'QuickNotesRecent', fileName: () => 'recent.js' },
+  rollupOptions: { output: { assetFileNames: 'recent.[ext]' } },
+}});
+for (const name of ['plugin.json', 'README.md', 'README_en_US.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'window.html', 'recent.html', 'icon.png', 'preview.png']) {
   await copyFile(name, `dist/${name}`);
 }
 await cp('i18n', 'dist/i18n', { recursive: true });
@@ -34,7 +39,7 @@ async function collect(dir) {
   }
 }
 await collect('dist');
-for (const required of ['index.js', 'index.css', 'plugin.json', 'window.js', 'window.css', 'window.html', 'README.md', 'README_en_US.md', 'tray.ico', 'tray.png', 'trayTemplate.png', 'trayTemplate@2x.png', 'tray-lifetime.cjs']) {
+for (const required of ['index.js', 'index.css', 'plugin.json', 'window.js', 'window.css', 'window.html', 'recent.js', 'recent.css', 'recent.html', 'README.md', 'README_en_US.md', 'tray.ico', 'tray.png', 'trayTemplate.png', 'trayTemplate@2x.png', 'tray-lifetime.cjs']) {
   if (!files[required]) throw new Error(`Missing package file: ${required}`);
 }
 if (Object.keys(files).some(p => p.includes('..') || p.includes('node_modules'))) throw new Error('Unsafe archive entry');

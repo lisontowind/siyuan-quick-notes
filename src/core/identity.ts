@@ -3,8 +3,8 @@ import type { NoteRecord, NoteReference } from '../types';
 export function noteSummary(text: string, limit = 80, fallback = '空白速记'): string {
   return text.split('\n').find(line => line.trim())?.trim().slice(0, limit) || fallback;
 }
-export function noteLabel(note: Pick<NoteRecord, 'text' | 'title'>, limit = 80, fallback = '空白速记'): string {
-  return note.title?.trim().slice(0, limit) || noteSummary(note.text, limit, fallback);
+export function noteLabel(note: Pick<NoteRecord, 'text' | 'title' | 'caption'>, limit = 80, fallback = '空白速记'): string {
+  return note.caption?.trim().slice(0, limit) || note.title?.trim().slice(0, limit) || noteSummary(note.text, limit, fallback);
 }
 export function validNoteTitle(title: unknown): title is string | undefined {
   return title === undefined || (typeof title === 'string' && title.length <= 200 && !/[\u0000-\u001f\u007f]/.test(title));
@@ -19,6 +19,9 @@ export function migrateNoteTitle(note: NoteRecord): NoteRecord {
 }
 export function noteReference(note: NoteReference): NoteReference {
   return { id: note.id, blockId: note.blockId, docId: note.docId, target: note.target,
+    ...(note.siyuanSaved !== undefined ? { siyuanSaved: note.siyuanSaved } : {}),
+    ...(note.calloutType !== undefined ? { calloutType: note.calloutType } : {}),
+    ...(note.caption !== undefined ? { caption: note.caption } : {}),
     ...(note.title !== undefined ? { title: note.title } : {}), ...(note.docPath !== undefined ? { docPath: note.docPath } : {}),
     ...(note.storage !== undefined ? { storage: note.storage } : {}),
     ...(note.docTitle !== undefined ? { docTitle: note.docTitle } : {}),
@@ -31,5 +34,12 @@ export function timestamp(time: number, separator = ''): string {
 }
 export function createNote(now = Date.now()): NoteRecord {
   const id = crypto.randomUUID();
-  return { id, blockId: `${timestamp(now)}-${id.replaceAll('-', '').slice(0, 7)}`, createdAt: now, updatedAt: now, text: '', revision: 0, savedRevision: 0 };
+  return { id, blockId: `${timestamp(now)}-${id.replaceAll('-', '').slice(0, 7)}`, createdAt: now, updatedAt: now, text: '', revision: 0, savedRevision: 0, siyuanSaved: false };
+}
+// Older references predate the explicit confirmation flag.
+export function isSavedToSiYuan(note: Pick<NoteReference, 'docId' | 'siyuanSaved'>): boolean {
+  return !!note.docId && (note.siyuanSaved ?? true);
+}
+export function isEmptyNewNote(note: NoteRecord): boolean {
+  return !note.docId && !isSavedToSiYuan(note) && !note.text.trim() && !note.title?.trim() && !note.caption?.trim();
 }
