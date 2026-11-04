@@ -547,6 +547,8 @@ try {
   await page.locator('#more').click(); await page.getByRole('menuitem', { name: '整理便签', exact: true }).click();
   await page.locator('.cleanup-row').first().waitFor();
   assert.equal(await page.locator('.cleanup-row').count(), 30);
+  // Snapshot rows render before the load continuation applies default selection.
+  await page.waitForFunction(() => document.querySelectorAll('.cleanup-row input:checked').length === 29);
   assert.equal(await page.locator('.cleanup-row input:checked').count(), 29);
   assert.equal(await page.locator('.cleanup-row input:disabled').count(), 1);
   await page.screenshot({ path: resolve(output, 'cleanup-archive.png') });
