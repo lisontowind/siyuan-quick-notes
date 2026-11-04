@@ -239,6 +239,10 @@ try {
   await page.keyboard.press('ArrowLeft'); await page.keyboard.press('ArrowLeft'); await page.keyboard.press('Backspace'); await page.waitForTimeout(200);
   assert.equal(await page.evaluate(() => window.__requests.filter(r => r.action === 'edit').at(-1).text), '正文');
   await page.setViewportSize({ width: 320, height: 320 });
+  // Viewport resizing and ResizeObserver toolbar updates arrive on separate
+  // frames in headless Linux. Check the settled layout, keeping overflow fatal.
+  await page.waitForFunction(() => document.body.scrollWidth <= innerWidth
+    && [...document.querySelectorAll('#format-toolbar button')].every(button => button.getBoundingClientRect().right <= innerWidth));
   assert.equal(await page.locator('body').evaluate(element => element.scrollWidth <= innerWidth), true);
   const tools = await page.locator('#format-toolbar button').evaluateAll(buttons => buttons.map(button => button.getBoundingClientRect().top));
   assert.equal(new Set(tools).size, 1); assert.equal(await page.locator('#format-link').count(), 0);
