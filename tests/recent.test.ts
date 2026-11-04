@@ -102,6 +102,38 @@ describe('recent list data', () => {
   });
 });
 describe('independent recent window', () => {
+  it('keeps native controls and cleanup cancellation responsive during a slow preview', async () => {
+    const h = setup(); let finish!: (value: any) => void;
+    const cancel = vi.fn(); Object.assign(h.actions, { cleanupCancel: cancel });
+    h.actions.previewSettings.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    await h.controller.show();
+    await h.request('preview-settings', undefined, { settings: h.settings });
+    await h.request('pin'); await h.request('minimize'); await h.request('cleanup-cancel'); await h.request('close');
+    expect(h.windows[0].pinned).toBe(true); expect(h.windows[0].minimize).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalledOnce(); expect(h.windows[0].hide).toHaveBeenCalledOnce();
+    finish({ notebook: 'n', path: '/preview' }); await vi.advanceTimersByTimeAsync(0);
+    await h.controller.dispose();
+  });
+  it('throttles background statistics while refreshing notes and cancels deferred work when hidden', async () => {
+    const h = setup(), cleanup = vi.fn().mockResolvedValue({ items: [], total: 0, unsaved: 0, eligible: 0 });
+    Object.assign(h.actions, { cleanup });
+    await h.controller.show(); await vi.advanceTimersByTimeAsync(0);
+    for (let i = 0; i < 5; i++) { h.controller.refresh(); await vi.advanceTimersByTimeAsync(250); }
+    expect(h.actions.items.mock.calls.length).toBeGreaterThan(1); expect(cleanup).toHaveBeenCalledOnce();
+    await h.request('close'); await vi.advanceTimersByTimeAsync(3000); expect(cleanup).toHaveBeenCalledOnce();
+    await h.controller.show(); await vi.advanceTimersByTimeAsync(0); expect(cleanup).toHaveBeenCalledTimes(2);
+    await h.controller.dispose();
+  });
+  it('does not deliver late action responses or queued commands to a replacement window', async () => {
+    const h = setup(); let finish!: (value: any) => void;
+    h.actions.previewSettings.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    await h.controller.show(); await h.request('preview-settings', undefined, { settings: h.settings });
+    await h.request('open', crypto.randomUUID()); h.windows[0].destroy();
+    await h.controller.show(); h.channel.sent.length = 0;
+    finish({ notebook: 'n', path: '/obsolete' }); await vi.advanceTimersByTimeAsync(0);
+    expect(h.channel.sent.some(value => value.preview)).toBe(false); expect(h.actions.open).not.toHaveBeenCalled();
+    await h.controller.dispose();
+  });
   it('initializes after an early ready message and publishes items without advancing the refresh timer', async () => {
     const h = setup();
     h.create.mockImplementationOnce(async () => {
@@ -126,6 +158,8 @@ describe('independent recent window', () => {
     expect(h.channel.sent.filter(value => value.items)).toHaveLength(2);
     expect(cleanup).toHaveBeenCalledOnce();
     finish({ items: [], total: 1, unsaved: 1, eligible: 0 }); await vi.advanceTimersByTimeAsync(0);
+    expect(cleanup).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(2000);
     expect(h.channel.sent.filter(value => value.cleanup).at(-1).cleanup.total).toBe(2);
     await h.controller.dispose();
   });

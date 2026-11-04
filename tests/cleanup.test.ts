@@ -81,6 +81,35 @@ describe('complete note inventory and reminders', () => {
 });
 
 describe('safe batch archive and clear', () => {
+  it('revalidates only selected records during a batch instead of rereading every body', async () => {
+    const h = await setup(), count = 8;
+    for (let i = 0; i < count; i++) {
+      const note = { ...h.make(`body ${i}`), docId: '20261010000000-doc0001' };
+      await h.store.write({ note }); await h.shared.publish(noteReference(note));
+    }
+    const preview = await h.service.snapshot();
+    const list = vi.spyOn(h.store, 'list'), local = vi.spyOn(h.store, 'listLocal'), backups = vi.spyOn(h.store, 'listBackups');
+    const load = vi.spyOn(h.shared, 'load'), read = vi.spyOn(h.store, 'read');
+    h.service.start('clear', preview.items, true);
+    await vi.waitFor(() => expect(h.service.currentProgress()?.running).toBe(false), { timeout: 10000, interval: 10 });
+    expect(h.service.currentProgress()).toMatchObject({ succeeded: count, failures: [] });
+    expect(list).not.toHaveBeenCalled(); expect(local).not.toHaveBeenCalled(); expect(backups).not.toHaveBeenCalled();
+    expect(read).toHaveBeenCalledTimes(4 * count);
+    expect(load.mock.calls.every(([id]) => preview.items.some(item => item.id === id))).toBe(true);
+  });
+  it('retains a draft changed between the first validation and final removal check', async () => {
+    const h = await setup(), note = h.make('approved'); await h.store.write({ note });
+    const preview = await h.service.snapshot(), original = h.store.read.bind(h.store); let reads = 0;
+    vi.spyOn(h.store, 'read').mockImplementation(async id => {
+      if (++reads === 2) await h.store.write({ note: { ...note, text: 'new input', revision: 2 } });
+      return original(id);
+    });
+    h.service.start('clear', preview.items, true);
+    await vi.waitFor(() => expect(h.service.currentProgress()?.running).toBe(false));
+    expect(h.service.currentProgress()).toMatchObject({ succeeded: 0, skipped: 1 });
+    expect((await h.store.read(note.id))?.note.text).toBe('new input');
+    expect((await h.shared.load()).deleted.has(note.id)).toBe(false);
+  });
   it('archives unsaved drafts using the existing save path, then removes local and shared copies only', async () => {
     const h = await setup(), note = h.make(); await h.store.write({ note });
     const progress = await h.run('archive'); expect(progress.succeeded).toBe(1); expect(progress.failures).toEqual([]);

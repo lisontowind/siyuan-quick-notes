@@ -6,6 +6,7 @@ import { SerialQueue } from '../core/serial';
 import { validBlockId } from '../services/repository';
 import { validNoteTitle, isSavedToSiYuan } from '../core/identity';
 import { draftStamp, covers, type SharedDraftStore } from './shared-drafts';
+import { writeAtomicJson } from './atomic-json';
 
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 export function validNoteReference(value: unknown): value is NoteReference {
@@ -60,11 +61,7 @@ export class LocalDraftStore implements DraftStore {
     if (!validGeometry(value)) throw new Error('最近列表窗口状态格式错误');
     await this.queue.run('recent-window', async () => {
       await this.fs.mkdir(this.directory, { recursive: true });
-      const file = this.path.join(this.directory, 'recent-window.json'), temp = `${file}.${crypto.randomUUID()}.tmp`;
-      const handle = await this.fs.open(temp, 'wx');
-      try { await handle.writeFile(JSON.stringify(value), 'utf8'); await handle.sync(); }
-      finally { await handle.close(); }
-      try { await this.fs.rename(temp, file); } catch (error) { await this.fs.unlink(temp).catch(() => {}); throw error; }
+      await writeAtomicJson(this.fs, this.path.join(this.directory, 'recent-window.json'), value);
     });
   }
   async loadWindowState(): Promise<Record<string, WindowRecoveryState>> {
@@ -83,12 +80,7 @@ export class LocalDraftStore implements DraftStore {
   async saveWindowState(value: Record<string, WindowRecoveryState>): Promise<void> {
     await this.queue.run('windows', async () => {
       await this.fs.mkdir(this.directory, { recursive: true });
-      const file = this.path.join(this.directory, 'windows.json');
-      const temp = `${file}.${crypto.randomUUID()}.tmp`;
-      const handle = await this.fs.open(temp, 'wx');
-      try { await handle.writeFile(JSON.stringify(value), 'utf8'); await handle.sync(); }
-      finally { await handle.close(); }
-      try { await this.fs.rename(temp, file); } catch (error) { await this.fs.unlink(temp).catch(() => {}); throw error; }
+      await writeAtomicJson(this.fs, this.path.join(this.directory, 'windows.json'), value);
     });
   }
   private file(id: string): string {
@@ -99,18 +91,19 @@ export class LocalDraftStore implements DraftStore {
     if (!validDraft(draft)) throw new Error('无效草稿内容');
     await this.queue.run(draft.note.id, async () => {
       await this.fs.mkdir(this.directory, { recursive: true });
-      const file = this.file(draft.note.id);
-      const temp = `${file}.${crypto.randomUUID()}.tmp`;
-      const handle = await this.fs.open(temp, 'wx');
-      try { await handle.writeFile(JSON.stringify(draft), 'utf8'); await handle.sync(); }
-      finally { await handle.close(); }
-      try { await this.fs.rename(temp, file); }
-      catch (error) { await this.fs.unlink(temp).catch(() => {}); throw error; }
+      await writeAtomicJson(this.fs, this.file(draft.note.id), draft);
     });
   }
   async write(draft: Draft): Promise<void> {
     // Each device owns its recovery files. Foreign drafts are read-only sources.
     await this.writeLocal({ note: draft.note, geometry: draft.geometry });
+  }
+  async read(id: string): Promise<Draft | undefined> {
+    try {
+      const value: unknown = JSON.parse(await this.fs.readFile(this.file(id), 'utf8'));
+      if (!validDraft(value) || value.note.id !== id) throw new Error('草稿格式错误，原文件已保留');
+      return value;
+    } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error; }
   }
   async savedContext(_id: string): Promise<import('../types').NoteRecord['draftSync']> { return undefined; }
   async remove(id: string): Promise<void> {
@@ -143,10 +136,7 @@ export class LocalDraftStore implements DraftStore {
   async writeMaintenance(name: 'reminder' | 'cleanup', value: unknown): Promise<void> {
     await this.queue.run(name, async () => {
       await this.fs.mkdir(this.directory, { recursive: true });
-      const file = this.path.join(this.directory, `${name}.json`), temp = `${file}.${crypto.randomUUID()}.tmp`;
-      const handle = await this.fs.open(temp, 'wx');
-      try { await handle.writeFile(JSON.stringify(value), 'utf8'); await handle.sync(); } finally { await handle.close(); }
-      try { await this.fs.rename(temp, file); } finally { await this.fs.unlink(temp).catch(() => {}); }
+      await writeAtomicJson(this.fs, this.path.join(this.directory, `${name}.json`), value);
     });
   }
   async listLocal(): Promise<Draft[]> {

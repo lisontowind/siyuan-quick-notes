@@ -62,6 +62,24 @@ function commit(panel: any, directoryValue: string) {
   directory.value = directoryValue; directory.listeners.get('input')(); panel.options.confirmCallback();
 }
 describe('plugin settings and stored history integration', () => {
+  it('shares only in-flight list inventories and reads drafts after reconciliation completes', async () => {
+    const { plugin } = setup(); let finish!: () => void;
+    const reconciled = new Promise<void>(resolve => { finish = resolve; });
+    const registry = { records: [], deleted: new Set<string>() };
+    plugin.shared = { load: vi.fn().mockResolvedValue(registry) };
+    plugin.cleanup = { reconcile: vi.fn(() => reconciled), currentProgress: () => undefined };
+    plugin.drafts = { list: vi.fn().mockResolvedValue([]) };
+    const first = plugin.recentInputs(), concurrent = plugin.recentInputs();
+    await vi.waitFor(() => expect(plugin.cleanup.reconcile).toHaveBeenCalledOnce());
+    expect(plugin.drafts.list).not.toHaveBeenCalled(); finish();
+    const [a, b] = await Promise.all([first, concurrent]);
+    expect(a).toBe(b); expect(a.registry).toBe(registry);
+    expect(plugin.shared.load).toHaveBeenCalledOnce(); expect(plugin.drafts.list).toHaveBeenCalledOnce();
+    const note = { ...createNote(), text: 'new content', revision: 1 };
+    plugin.drafts.list.mockResolvedValue([{ note }]);
+    expect((await plugin.recentInputs()).drafts[0].note.text).toBe('new content');
+    expect(plugin.shared.load).toHaveBeenCalledTimes(2); expect(plugin.drafts.list).toHaveBeenCalledTimes(2);
+  });
   it('only copies foreign drafts to a fresh local identity, preserving the source and avoiding duplicate copies on retry', async () => {
     const { plugin, api } = setup(), root = await fs.mkdtemp(path.join(tmpdir(), 'sqn-choices-')), device = crypto.randomUUID();
     try {

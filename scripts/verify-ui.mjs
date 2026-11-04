@@ -18,12 +18,12 @@ const server = createServer(async (request, response) => {
 });
 await new Promise(ready => server.listen(0, '127.0.0.1', ready));
 const origin = `http://127.0.0.1:${server.address().port}`;
-const browser = await chromium.launch({ headless: true, executablePath: process.env.DOCS_CHROMIUM || chromium.executablePath() });
 const errors = [];
 const sample = '# 即时渲染\n\n**粗体** *斜体* ~~删除线~~ `code` [链接](https://example.com)\n\n> 引用文字\n\n- 普通列表\n- [ ] 待办事项\n\n| 项目 | 状态 |\n| --- | --- |\n| 表格 | 支持 |\n\n```js\nconst value = "**源码**";\n```\n\n![示例](assets/example.png)\n\n编辑这里';
 const noteState = { revision: 1, savedRevision: 1, localRevision: 1, docId: '20261010000000-aaaaaaa', title: '', docTitle: '2026-10-19', phase: 'saved', pinned: false, dark: false, showSaved: true };
-let page;
+let browser, page;
 try {
+  browser = await chromium.launch({ headless: true, executablePath: process.env.DOCS_CHROMIUM || chromium.executablePath() });
   page = await browser.newPage({ viewport: { width: 500, height: 800 } });
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
@@ -676,4 +676,4 @@ try {
 } catch (error) {
   if (page && !page.isClosed()) await page.screenshot({ path: resolve(output, 'failure.png'), fullPage: true }).catch(() => {});
   console.error('Browser errors:', errors); throw error;
-} finally { await browser.close(); server.close(); }
+} finally { await browser?.close(); server.close(); }

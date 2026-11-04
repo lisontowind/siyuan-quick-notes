@@ -12,6 +12,8 @@ function decorations(value: EditorState, from = 0, to = value.doc.length) {
   // EditorState's initial parser has a small time budget. Finish it explicitly
   // so parallel test load cannot turn an incomplete tree into a false failure.
   expect(ensureSyntaxTree(value, value.doc.length, 1000)).not.toBeNull();
+  // Publish the completed parse to the state read by liveDecorations.
+  value = value.update({}).state;
   const result: Array<{ from: number; to: number; value: any }> = [];
   liveDecorations(value, from, to).between(0, value.doc.length, (from, to, value) => { result.push({ from, to, value }); }); return result;
 }

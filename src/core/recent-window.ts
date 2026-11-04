@@ -39,6 +39,8 @@ export class RecentWindowController {
   private refreshAgain = false;
   private refreshingCleanup = false;
   private cleanupAgain = false;
+  private cleanupTimer?: ReturnType<typeof setTimeout>;
+  private lastCleanup = -Infinity;
   private visible = false;
   private lifetime?: { stop(): void };
   private writes: Promise<void> = Promise.resolve();
@@ -51,10 +53,15 @@ export class RecentWindowController {
       if (!this.active || !this.native || !validRecentRequest(event.data, this.session)) return;
       const request: RecentRequest = event.data;
       if (request.action === 'heartbeat') { this.send({ requestId: request.requestId }); return; }
-      void this.queue.run('actions', async () => {
-        if (!this.active || !this.native) return;
+      const native = this.native;
+      const run = async () => {
+        if (!this.active || this.native !== native || native.isDestroyed()) return;
         await this.handle(request);
-      }).catch(error => this.send({ requestId: request.requestId, error: message(error) }));
+      };
+      // Native controls and cancellation must remain available during kernel I/O.
+      const immediate = ['pin', 'minimize', 'close', 'cleanup-cancel'].includes(request.action);
+      void (immediate ? run() : this.queue.run('actions', run))
+        .catch(error => this.send({ requestId: request.requestId, error: message(error) }, native));
     };
   }
   async show(page: RecentPage = 'notes'): Promise<void> {
@@ -85,6 +92,7 @@ export class RecentWindowController {
     native.on('close', () => this.remember());
     native.on('closed', () => {
       this.native = undefined; this.visible = false; clearTimeout(this.refreshTimer); this.refreshTimer = undefined; clearTimeout(this.geometryTimer);
+      clearTimeout(this.cleanupTimer); this.cleanupTimer = undefined; this.lastCleanup = -Infinity;
       this.lifetime?.stop(); this.lifetime = undefined;
     });
     native.on('focus', () => this.refresh());
@@ -97,8 +105,8 @@ export class RecentWindowController {
     // initial page here as well so it need not wait for the heartbeat retry.
     this.visible = true; this.send({ page: this.page }); this.adapter.focus(native); this.refresh(true);
   }
-  private send(value: Omit<RecentResponse, 'session' | 'windowId'>): void {
-    if (!this.active || !this.native || this.native.isDestroyed()) return;
+  private send(value: Omit<RecentResponse, 'session' | 'windowId'>, expected = this.native): void {
+    if (!this.active || !this.native || this.native !== expected || this.native.isDestroyed()) return;
     this.channel.postMessage({ session: this.session, windowId: 'recent', pinned: this.adapter.geometry(this.native).pinned,
       dark: document.documentElement.getAttribute('data-theme-mode') === 'dark', ...value } satisfies RecentResponse);
   }
@@ -130,6 +138,12 @@ export class RecentWindowController {
   private refreshCleanup(): void {
     if (!this.active || !this.native || !this.visible || !this.actions.cleanup) return;
     if (this.refreshingCleanup) { this.cleanupAgain = true; return; }
+    const delay = 2000 - (Date.now() - this.lastCleanup);
+    if (delay > 0) {
+      this.cleanupTimer ??= setTimeout(() => { this.cleanupTimer = undefined; this.refreshCleanup(); }, delay);
+      return;
+    }
+    clearTimeout(this.cleanupTimer); this.cleanupTimer = undefined; this.lastCleanup = Date.now();
     const native = this.native;
     this.refreshingCleanup = true;
     void Promise.resolve().then(() => this.actions.cleanup!()).then(cleanup => {
@@ -146,6 +160,7 @@ export class RecentWindowController {
     // when the plugin/workspace shuts down.
     this.remember(); this.native?.hide(); this.visible = false;
     clearTimeout(this.refreshTimer); this.refreshTimer = undefined;
+    clearTimeout(this.cleanupTimer); this.cleanupTimer = undefined;
     this.refreshAgain = false; this.cleanupAgain = false;
   }
   settingsChanged(): void { this.send({ settingsChanged: true }); this.refresh(); }
@@ -156,43 +171,45 @@ export class RecentWindowController {
   }
   private async handle(request: RecentRequest): Promise<void> {
     const native = this.native!;
+    const send = (value: Omit<RecentResponse, 'session' | 'windowId'>) => this.send(value, native);
+    const refresh = (immediate = false) => { if (this.native === native) this.refresh(immediate); };
     switch (request.action) {
-      case 'ready': this.send({ page: this.page }); this.refresh(true); break;
-      case 'refresh': this.refresh(true); break;
-      case 'notes': this.page = 'notes'; this.refresh(); break;
-      case 'draft-versions': this.page = 'drafts'; this.send({ requestId: request.requestId, draftVersions: await this.actions.versions?.(request.id!) }); return;
-      case 'choose-draft-version': await this.actions.chooseVersion?.(request.id!, request.version!, request.token!, request.copy!); this.refresh(); break;
-      case 'cleanup': this.page = 'cleanup'; this.send({ requestId: request.requestId, cleanup: await this.actions.cleanup?.() }); return;
-      case 'cleanup-start': this.send({ requestId: request.requestId, cleanupProgress: this.actions.cleanupStart?.(request.mode!, request.selections!, request.discard!) }); this.refresh(); return;
-      case 'cleanup-cancel': this.actions.cleanupCancel?.(); this.refresh(); break;
+      case 'ready': send({ page: this.page }); refresh(true); break;
+      case 'refresh': refresh(true); break;
+      case 'notes': this.page = 'notes'; refresh(); break;
+      case 'draft-versions': this.page = 'drafts'; send({ requestId: request.requestId, draftVersions: await this.actions.versions?.(request.id!) }); return;
+      case 'choose-draft-version': await this.actions.chooseVersion?.(request.id!, request.version!, request.token!, request.copy!); refresh(); break;
+      case 'cleanup': this.page = 'cleanup'; send({ requestId: request.requestId, cleanup: await this.actions.cleanup?.() }); return;
+      case 'cleanup-start': send({ requestId: request.requestId, cleanupProgress: this.actions.cleanupStart?.(request.mode!, request.selections!, request.discard!) }); refresh(); return;
+      case 'cleanup-cancel': this.actions.cleanupCancel?.(); refresh(); break;
       case 'cleanup-snooze': await this.actions.cleanupSnooze?.(); break;
-      case 'settings': this.page = 'settings'; this.send({ requestId: request.requestId, settingsData: await this.actions.loadSettings() }); return;
+      case 'settings': this.page = 'settings'; send({ requestId: request.requestId, settingsData: await this.actions.loadSettings() }); return;
       case 'save-settings': {
         const result = await this.actions.saveSettings(request.settings!);
-        this.send({ requestId: request.requestId, savedSettings: result.settings, settingsWarning: result.warning }); this.refresh(); return;
+        send({ requestId: request.requestId, savedSettings: result.settings, settingsWarning: result.warning }); refresh(); return;
       }
-      case 'preview-settings': this.send({ requestId: request.requestId, preview: await this.actions.previewSettings(request.settings!) }); return;
+      case 'preview-settings': send({ requestId: request.requestId, preview: await this.actions.previewSettings(request.settings!) }); return;
       case 'shortcuts': {
         this.actions.shortcuts(); native.minimize();
         break;
       }
-      case 'open': await this.actions.open(request.id!); this.refresh(); break;
-      case 'siyuan': await this.actions.siYuan(request.id!); this.refresh(); break;
-      case 'new': await this.actions.createNote(); this.refresh(); break;
+      case 'open': await this.actions.open(request.id!); refresh(); break;
+      case 'siyuan': await this.actions.siYuan(request.id!); refresh(); break;
+      case 'new': await this.actions.createNote(); refresh(); break;
       case 'delete': {
-        await this.actions.delete(request.id!); this.refresh();
+        await this.actions.delete(request.id!); refresh();
         break;
       }
       case 'pin': native.setAlwaysOnTop(!this.adapter.geometry(native).pinned); this.remember(); break;
       case 'minimize': native.minimize(); break;
       case 'close': this.hide(); break;
     }
-    this.send({ requestId: request.requestId });
+    send({ requestId: request.requestId });
   }
   async dispose(): Promise<void> {
     if (!this.active) return;
     this.remember(); this.active = false;
-    clearTimeout(this.refreshTimer); clearTimeout(this.geometryTimer);
+    clearTimeout(this.refreshTimer); clearTimeout(this.geometryTimer); clearTimeout(this.cleanupTimer);
     this.lifetime?.stop(); this.lifetime = undefined; this.native = undefined; this.channel.close();
     await this.writes;
   }

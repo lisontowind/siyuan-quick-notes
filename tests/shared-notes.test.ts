@@ -14,6 +14,25 @@ async function setup() {
 }
 function record(text: string) { const note = createNote(); note.docId = '20261010000000-doc0001'; return { ...noteReference(note), summary: text }; }
 describe('cross-device registry', () => {
+  it('reads all current device versions of one note and compacts only its deletion', async () => {
+    const { a, b, directory } = await setup(), first = record('first'), second = record('second');
+    await a.publish(first); await a.publish(second);
+    expect((await a.load(first.id)).records).toEqual([first]);
+    await b.publish({ ...first, summary: 'new device edit', updatedAt: first.updatedAt + 1 });
+    expect((await a.load(first.id)).records[0].summary).toBe('new device edit');
+    await b.remove(first.id); await a.compact(first.id);
+    expect(await a.load(first.id)).toEqual({ records: [], deleted: new Set([first.id]) });
+    expect((await a.load()).records).toEqual([second]);
+    expect((await fs.readdir(path.join(directory, 'notes'))).some(file => file.startsWith(first.id))).toBe(false);
+    await expect(a.load('../outside')).rejects.toThrow();
+  });
+  it('rejects a corrupt target during a targeted read instead of treating it as missing', async () => {
+    const { a, directory } = await setup(), note = record('target'); await a.publish(note);
+    const file = (await fs.readdir(path.join(directory, 'notes')))[0];
+    await fs.writeFile(path.join(directory, 'notes', file), '{broken');
+    await expect(a.load(note.id)).rejects.toThrow();
+    expect(await fs.readFile(path.join(directory, 'notes', file), 'utf8')).toBe('{broken');
+  });
   it('merges independently created notes and later metadata without publishing draft text or geometry', async () => {
     const { a, b, directory } = await setup(), first = record('A'), second = record('B');
     await Promise.all([a.publish({ ...first, text: 'private draft', baseline: 'private baseline' } as any), b.publish(second)]);

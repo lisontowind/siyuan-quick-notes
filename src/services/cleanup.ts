@@ -2,7 +2,7 @@ import type { Draft, NoteRecord, NoteReference, Settings } from '../types';
 import type { HistoryRecord } from '../core/windows';
 import { isSavedToSiYuan, noteLabel } from '../core/identity';
 import type { LocalDraftStore } from '../platform/drafts';
-import type { SharedNoteStore } from '../platform/shared-notes';
+import type { SharedNoteStore, SharedNotes } from '../platform/shared-notes';
 import type { NoteRepository } from './repository';
 import { AutoSaveService, message } from './autosave';
 import { SerialQueue } from '../core/serial';
@@ -19,6 +19,7 @@ export interface CleanupProgress {
   completed: number; succeeded: number; skipped: number; failures: Array<{ id: string; error: string }>;
 }
 export interface CleanupSnapshot { items: CleanupItem[]; total: number; unsaved: number; eligible: number; reminderActive?: boolean; progress?: CleanupProgress }
+export interface CleanupInputs { registry: SharedNotes; drafts: Draft[] }
 interface Entry { ref: HistoryRecord; local?: Draft; backup?: Draft; active?: NoteRecord; removed: boolean; signature: string }
 interface PendingCleanup { id: string; draft?: string; backup?: string }
 interface Reminder { lastDay?: string; snoozeUntil?: number }
@@ -41,9 +42,12 @@ export class CleanupService {
   constructor(private store: LocalDraftStore, private shared: SharedNoteStore, private repo: NoteRepository,
     private settings: () => Settings, private host: CleanupHost) {}
 
-  private async entries(): Promise<Entry[]> {
-    const registry = await this.shared.load();
-    const drafts = await this.store.list(), backups = await this.store.listBackups();
+  private async entries(id?: string, inputs?: CleanupInputs): Promise<Entry[]> {
+    const registry = inputs?.registry ?? await this.shared.load(id);
+    const local = id === undefined ? undefined : await this.store.read(id);
+    const backup = id === undefined ? undefined : await this.store.readBackup(id);
+    const drafts = inputs?.drafts ?? (id === undefined ? await this.store.list() : local ? [local] : []);
+    const backups = id === undefined ? await this.store.listBackups() : backup ? [backup] : [];
     const values = new Map<string, { ref: HistoryRecord; local?: Draft; backup?: Draft; active?: NoteRecord }>();
     for (const ref of registry.records) values.set(ref.id, { ref });
     for (const backup of backups) {
@@ -54,15 +58,15 @@ export class CleanupService {
       const prior = values.get(local.note.id);
       values.set(local.note.id, { ...prior, ref: local.note, local });
     }
-    for (const active of this.host.active()) values.set(active.id, { ...values.get(active.id), ref: active, active });
+    for (const active of this.host.active()) if (id === undefined || active.id === id) values.set(active.id, { ...values.get(active.id), ref: active, active });
     return [...values.values()].filter(value => {
       if (registry.deleted.has(value.ref.id)) return !!value.active || !!value.local && (dirty(value.local.note) || value.local.variants?.some(variant => dirty(variant.note)));
       return value.active ? !!value.active.text.trim() || isSavedToSiYuan(value.active) : true;
     }).map(value => ({ ...value, removed: registry.deleted.has(value.ref.id),
       signature: JSON.stringify([value.ref, value.local?.note, value.local?.variants, value.backup?.note, value.active, registry.deleted.has(value.ref.id)]) }));
   }
-  async snapshot(now = Date.now()): Promise<CleanupSnapshot> {
-    const entries = await this.entries(), ids = new Set(entries.map(entry => entry.ref.id));
+  async snapshot(now = Date.now(), inputs?: CleanupInputs): Promise<CleanupSnapshot> {
+    const entries = await this.entries(undefined, inputs), ids = new Set(entries.map(entry => entry.ref.id));
     for (const id of this.previews.keys()) if (!ids.has(id)) this.previews.delete(id);
     const items = entries.map(entry => {
       let preview = this.previews.get(entry.ref.id);
@@ -109,7 +113,7 @@ export class CleanupService {
       try {
         if (!selection.signature || this.host.busy(id) || this.host.active().some(note => note.id === id)) { progress.skipped++; continue; }
         this.locks.add(id);
-        let entry = (await this.entries()).find(value => value.ref.id === id);
+        let entry = (await this.entries(id))[0];
         if (!entry || entry.signature !== selection.signature || entry.active) { progress.skipped++; continue; }
         if (mode === 'archive') {
           if ((entry.local?.variants?.length ?? 0) > 1) throw new Error('草稿存在多个版本，请从速记列表选择版本或另存');
@@ -123,7 +127,7 @@ export class CleanupService {
               if (!await service.saveToSiYuan()) throw new Error(service.error || '保存未确认');
               // Persist the new reference before removing the only local recovery entry.
               await this.shared.publish(service.note);
-              const current = (await this.entries()).find(value => value.ref.id === id);
+              const current = (await this.entries(id))[0];
               if (!current || current.active || current.local && dirty(current.local.note) || current.backup?.note.text !== service.note.text) throw new Error('正文已变化，请刷新后重试');
               entry = current;
             } finally { service.dispose(); }
@@ -136,7 +140,7 @@ export class CleanupService {
           if ((entry.local?.variants?.some(value => dirty(value.note)) || (body ? dirty(body) : !isSavedToSiYuan(entry.ref))) && !discard) throw new Error('请确认丢弃未保存的本机内容');
         }
         if (this.host.stopped() || this.host.active().some(note => note.id === id)) { progress.skipped++; continue; }
-        const latest = (await this.entries()).find(value => value.ref.id === id);
+        const latest = (await this.entries(id))[0];
         if (!latest || latest.signature !== entry.signature) { progress.skipped++; continue; }
         await this.remove(latest);
         progress.succeeded++;
@@ -147,7 +151,7 @@ export class CleanupService {
   private async remove(entry: Entry): Promise<void> {
     await this.maintenance.run('cleanup', async () => {
       const journal = await this.journal();
-      const physical = (await this.store.listLocal()).find(value => value.note.id === entry.ref.id);
+      const physical = await this.store.read(entry.ref.id);
       const approved = [entry.local?.note, ...(entry.local?.variants ?? []).map(value => value.note)].filter(Boolean);
       const pending: PendingCleanup = { id: entry.ref.id,
         draft: physical && approved.some(note => draftStamp(note!) === draftStamp(physical.note)) ? signature(physical.note) : undefined,
@@ -157,7 +161,7 @@ export class CleanupService {
         (await this.store.savedContext?.(entry.ref.id))?.clock ?? {}, ...(entry.local?.variants ?? []).map(value => value.note.draftSync?.clock ?? {}));
       await this.shared.remove(entry.ref.id, clock); this.host.removed(entry.ref.id);
       await this.finish(pending);
-      await this.shared.compact();
+      await this.shared.compact(entry.ref.id);
       await this.store.writeMaintenance('cleanup', journal.filter(value => value !== pending));
     });
   }
@@ -168,7 +172,7 @@ export class CleanupService {
   }
   private async finish(pending: PendingCleanup): Promise<void> {
     if (this.host.active().some(note => note.id === pending.id) || this.host.busy(pending.id)) return;
-    const draft = (await this.store.listLocal()).find(value => value.note.id === pending.id);
+    const draft = await this.store.read(pending.id);
     const backup = await this.store.readBackup(pending.id);
     if (draft && signature(draft.note) === pending.draft) await this.store.remove(pending.id);
     if (backup && signature(backup.note) === pending.backup) await this.store.removeBackup(pending.id);

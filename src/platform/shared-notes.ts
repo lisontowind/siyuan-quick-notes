@@ -4,6 +4,7 @@ import type { HistoryRecord } from '../core/windows';
 import { parseHistory } from '../core/history';
 import { SerialQueue } from '../core/serial';
 import type { SharedDraftStore } from './shared-drafts';
+import { writeAtomicJson } from './atomic-json';
 
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 export interface SharedNotes { records: HistoryRecord[]; deleted: Set<string> }
@@ -22,26 +23,24 @@ export class SharedNoteStore {
   private async write(folder: string, name: string, value: unknown): Promise<void> {
     const directory = this.path.join(this.directory, folder);
     await this.fs.mkdir(directory, { recursive: true });
-    const file = this.path.join(directory, name), temp = `${file}.${crypto.randomUUID()}.tmp`;
-    const handle = await this.fs.open(temp, 'wx');
-    try { await handle.writeFile(JSON.stringify(value), 'utf8'); await handle.sync(); }
-    finally { await handle.close(); }
-    try { await this.fs.rename(temp, file); }
-    finally { await this.fs.unlink(temp).catch(() => {}); }
+    await writeAtomicJson(this.fs, this.path.join(directory, name), value);
   }
-  async load(): Promise<SharedNotes> {
+  async load(id?: string): Promise<SharedNotes> {
+    if (id !== undefined && !uuid.test(id)) throw new Error('无效速记标识');
     const deleted = new Set<string>();
-    for (const file of await this.files('deleted')) {
-      const id = file.replace(/\.json$/, '');
-      if (!file.endsWith('.json') || !uuid.test(id)) continue;
-      const value = JSON.parse(await this.fs.readFile(this.path.join(this.directory, 'deleted', file), 'utf8'));
-      if (value?.id !== id || value?.deleted !== true) throw new Error('共享删除记录损坏，请检查同步数据');
-      deleted.add(id);
+    for (const file of id === undefined ? await this.files('deleted') : [`${id}.json`]) {
+      const noteId = file.replace(/\.json$/, '');
+      if (!file.endsWith('.json') || !uuid.test(noteId)) continue;
+      let value: any;
+      try { value = JSON.parse(await this.fs.readFile(this.path.join(this.directory, 'deleted', file), 'utf8')); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; throw error; }
+      if (value?.id !== noteId || value?.deleted !== true) throw new Error('共享删除记录损坏，请检查同步数据');
+      deleted.add(noteId);
     }
     const records = new Map<string, HistoryRecord>();
     for (const file of (await this.files('notes')).sort()) {
       const parts = file.split('.');
-      if (parts.length !== 3 || parts[2] !== 'json' || !uuid.test(parts[0]) || !uuid.test(parts[1]) || deleted.has(parts[0])) continue;
+      if (parts.length !== 3 || parts[2] !== 'json' || !uuid.test(parts[0]) || !uuid.test(parts[1]) || deleted.has(parts[0]) || id !== undefined && parts[0] !== id) continue;
       let value: unknown;
       try { value = JSON.parse(await this.fs.readFile(this.path.join(this.directory, 'notes', file), 'utf8')); }
       catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; throw error; }
@@ -70,9 +69,9 @@ export class SharedNoteStore {
     await this.queue.run('write', () => this.write('deleted', `${id}.json`, { id, deleted: true }));
     if (clock) await this.drafts?.acknowledge(id, clock);
   }
-  async compact(): Promise<void> {
+  async compact(id?: string): Promise<void> {
     await this.queue.run('write', async () => {
-      const { deleted } = await this.load();
+      const { deleted } = await this.load(id);
       for (const file of await this.files('notes')) {
         const parts = file.split('.');
         if (parts.length !== 3 || parts[2] !== 'json' || !uuid.test(parts[0]) || !uuid.test(parts[1]) || !deleted.has(parts[0])) continue;

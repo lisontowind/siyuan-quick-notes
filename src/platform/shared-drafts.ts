@@ -4,6 +4,7 @@ import type { Draft, DraftVersion, NoteRecord } from '../types';
 import { validDraft } from './drafts';
 import { isSavedToSiYuan, noteReference } from '../core/identity';
 import { SerialQueue } from '../core/serial';
+import { writeAtomicJson } from './atomic-json';
 
 type Clock = Record<string, number>;
 interface Revision { id: string; version: string; device: string; clock: Clock; note?: NoteRecord }
@@ -61,9 +62,7 @@ export class SharedDraftStore {
       if (JSON.stringify(existing) !== JSON.stringify(value)) throw new Error('共享草稿版本损坏，原文件已保留');
       return;
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-    const temp = `${file}.${crypto.randomUUID()}.tmp`, handle = await this.fs.open(temp, 'wx');
-    try { await handle.writeFile(JSON.stringify(value), 'utf8'); await handle.sync(); } finally { await handle.close(); }
-    try { await this.fs.rename(temp, file); } finally { await this.fs.unlink(temp).catch(() => {}); }
+    await writeAtomicJson(this.fs, file, value);
   }
   private safe(note: NoteRecord): NoteRecord {
     return { ...noteReference(note), text: note.text, baseline: note.baseline, revision: note.revision, savedRevision: note.savedRevision };

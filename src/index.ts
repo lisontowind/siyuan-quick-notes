@@ -24,11 +24,11 @@ import { ImageUploadService } from './services/images';
 import { bindImageInputs, readImages } from './window/images';
 import type { MissingSourceChoice, NoteRecord, NoteReference, Settings } from './types';
 import { hostLocale, translate } from './core/i18n';
-import { SharedNoteStore } from './platform/shared-notes';
+import { SharedNoteStore, type SharedNotes } from './platform/shared-notes';
 import { SharedDraftStore } from './platform/shared-drafts';
 import type { DraftVersion } from './types';
 import { parseToolbarLayout, type ToolbarLayout } from './core/toolbar';
-import { CleanupService } from './services/cleanup';
+import { CleanupService, type CleanupInputs } from './services/cleanup';
 import { CleanupPanel } from './window/cleanup-panel';
 import { icon } from './window/icons';
 import { DraftVersionsPanel } from './window/draft-versions';
@@ -64,7 +64,8 @@ export default class QuickNotesPlugin extends Plugin {
   private draftVersionViews = new Map<string, { token: string; signature: string; copied?: NoteRecord; selected?: string }>();
   private deleted = new Set<string>();
   private toolbarLayout = parseToolbarLayout(undefined);
-  private sharedRead?: Promise<void>;
+  private sharedRead?: Promise<SharedNotes | undefined>;
+  private recentRead?: Promise<CleanupInputs>;
   private cleanup?: CleanupService;
   private reminderTimer?: ReturnType<typeof setTimeout>;
   private lastReminderCheck = 0;
@@ -88,7 +89,7 @@ export default class QuickNotesPlugin extends Plugin {
       }).catch(error => this.report(message(error)));
     }, Math.max(1500, 60000 - (Date.now() - this.lastReminderCheck)));
   };
-  private async refreshShared(): Promise<void> {
+  private async refreshShared(): Promise<SharedNotes | undefined> {
     if (!this.shared || this.disposed || this.unloading) return;
     if (this.sharedRead) return this.sharedRead;
     this.sharedRead = (async () => {
@@ -104,8 +105,22 @@ export default class QuickNotesPlugin extends Plugin {
         try { await this.cleanup.reconcile(); this.cleanupNeeded = false; }
         catch (error) { this.report(message(error)); }
       }
+      return result;
     })().finally(() => { this.sharedRead = undefined; });
     return this.sharedRead;
+  }
+  private recentInputs(): Promise<CleanupInputs> {
+    // Only share reads that are currently in flight. Later refreshes always see
+    // fresh synchronized files; cleanup mutations never use a cached inventory.
+    if (!this.recentRead) {
+      this.recentRead = (async () => {
+        const registry = await this.refreshShared();
+        const drafts = await this.drafts!.list();
+        if (!registry || this.disposed || this.unloading) throw new Error('插件已停用');
+        return { registry, drafts };
+      })().finally(() => { this.recentRead = undefined; });
+    }
+    return this.recentRead;
   }
   async onDataChanged(): Promise<void> {
     if (!this.shared || this.disposed || this.unloading) return;
@@ -221,8 +236,8 @@ export default class QuickNotesPlugin extends Plugin {
         }, (note, parent) => this.chooseMissingSource(note, parent));
       this.recentWindow = new RecentWindowController(adapter, this.drafts, () => this.settingsValue, {
         items: async () => {
-          await this.refreshShared();
-          return recentItems(this.historyValue, await this.drafts!.list(), [
+          const { drafts } = await this.recentInputs();
+          return recentItems(this.historyValue, drafts, [
           ...[...this.manager!.windows.values()].map(entry => entry.service.note),
           ...[...this.fallbackServices.values()].map(entry => entry.service.note),
           ]).filter(item => !this.deleted.has(item.id) || item.draft).map(item => ({ ...item, removed: this.deleted.has(item.id) }));
@@ -272,7 +287,7 @@ export default class QuickNotesPlugin extends Plugin {
           return { settings: { ...this.settingsValue }, warning };
         },
         shortcuts: () => this.showShortcutSettings(),
-        cleanup: () => this.cleanup!.snapshot(),
+        cleanup: async () => this.cleanup!.snapshot(Date.now(), await this.recentInputs()),
         cleanupStart: (mode, selections, discard) => this.cleanup!.start(mode, selections, discard),
         cleanupCancel: () => this.cleanup!.cancel(), cleanupSnooze: () => this.cleanup!.snooze(),
       }, native => this.remote.require(this.trayLifetimePath!).attachTrayLifetime(native, this.remote.getCurrentWebContents()), this.report);

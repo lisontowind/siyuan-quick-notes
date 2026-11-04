@@ -10,6 +10,15 @@ Requires **SiYuan desktop 3.8.6 or later on Windows, macOS, or Linux**, with SiY
 
 **Interface language:** floating notes and the independent recent-notes window, including its embedded settings, follow SiYuan's Chinese or English interface language. Reload the plugin after changing SiYuan's language. The tray menu and fallback panels currently use Chinese; this guide includes their Chinese labels. The operation guides show the real English note and list interfaces.
 
+## What’s new in 0.1.30
+
+- **Responsive window controls:** close, minimize and pin the list or cancel organization while a settings preview or save is slow.
+- **Less work during batch organization:** revalidate each target without repeatedly reading every draft body; changed drafts remain protected.
+- **Lighter list refreshes:** share in-flight reads between the list and statistics, and limit background statistics refreshes to once every two seconds.
+- **Reliable failed-write cleanup:** remove temporary files from failed writes while keeping confirmed files intact. Added pinned browser-test dependencies and isolated UI checks in CI.
+
+See the [0.1.30 release notes](docs/releases/0.1.30.md).
+
 ## What’s new in 0.1.29
 
 - **Save to SiYuan by default:** enable it under Saving and history to automatically save nonempty notes. Plugin drafts remain the default, and failed saves retain local content.
