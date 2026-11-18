@@ -4,6 +4,8 @@
 
 # Quick Notes
 
+Current version [0.1.34](docs/releases/0.1.34.md)
+
 Capture an idea without switching back to a document in SiYuan. Press **Ctrl + Alt + N** (**Option + Command + N** on macOS) to open a small floating note for ideas, tasks, or temporary excerpts. New notes autosave in device-specific plugin drafts. After you manually save a note to SiYuan, later edits sync automatically. Enable **Save to SiYuan by default** in settings to automate the first save too.
 
 Requires **SiYuan desktop 3.8.6 or later on Windows, macOS, or Linux**, with SiYuan running. See the [testing record (Chinese)](docs/testing.md) for the status of native macOS/Linux verification.
