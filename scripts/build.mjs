@@ -1,6 +1,7 @@
 import { build } from 'vite';
 import { readdir, readFile, writeFile, copyFile, cp } from 'node:fs/promises';
 import { resolve, relative, toNamespacedPath } from 'node:path';
+import { createHash } from 'node:crypto';
 import { zipSync } from 'fflate';
 import { createTrayIcon } from './create-tray-icon.mjs';
 
@@ -22,6 +23,17 @@ await build({ configFile: false, publicDir: false, build: {
 }});
 for (const name of ['plugin.json', 'README.md', 'README_en_US.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'window.html', 'recent.html', 'icon.png', 'preview.png']) {
   await copyFile(name, `dist/${name}`);
+}
+// Child windows share cached asset URLs across plugin upgrades. Changing the
+// page URL or manifest version alone does not invalidate those script/style URLs.
+for (const page of ['window', 'recent']) {
+  let html = await readFile(`dist/${page}.html`, 'utf8');
+  for (const extension of ['js', 'css']) {
+    const asset = `${page}.${extension}`;
+    const hash = createHash('sha256').update(await readFile(`dist/${asset}`)).digest('hex').slice(0, 16);
+    html = html.replace(`"${asset}"`, `"${asset}?v=${hash}"`);
+  }
+  await writeFile(`dist/${page}.html`, html);
 }
 await cp('i18n', 'dist/i18n', { recursive: true });
 await cp('docs', 'dist/docs', {

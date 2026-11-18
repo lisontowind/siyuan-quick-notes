@@ -10,6 +10,14 @@ Requires **SiYuan desktop 3.8.6 or later on Windows, macOS, or Linux**, with SiY
 
 **Interface language:** floating notes and the independent recent-notes window, including its embedded settings, follow SiYuan's Chinese or English interface language. Reload the plugin after changing SiYuan's language. The tray menu and fallback panels currently use Chinese; this guide includes their Chinese labels. The operation guides show the real English note and list interfaces.
 
+## What’s new in 0.1.33
+
+- **Shorter footer hint:** empty notes show “Autosaves in plugin”. Both language hints fit on one line at 300px and 320px widths.
+- **Load current UI assets after updates:** note and list script/style URLs change with their contents to avoid reusing stale cached files.
+- **Restore rounded tray icons:** regenerated the 16px, 32px and 48px tray assets from the transparent source to remove green pixels outside the rounded tile.
+
+Restart SiYuan once after updating to reload existing windows and the tray. See the [0.1.33 release notes](docs/releases/0.1.33.md).
+
 ## What’s new in 0.1.30
 
 - **Responsive window controls:** close, minimize and pin the list or cancel organization while a settings preview or save is slow.

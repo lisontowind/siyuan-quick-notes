@@ -87,10 +87,16 @@ assert.match(strFromU8(files['index.js']), /require\(["']siyuan["']\)/);
 assert.match(strFromU8(files['index.js']), /module\.exports\s*=/);
 assert(!/\brequire\(/.test(strFromU8(files['window.js'])), 'Window bundle must not require Node modules');
 assert(!/\brequire\(/.test(strFromU8(files['recent.js'])), 'Recent bundle must not require Node modules');
-const recentHtml = strFromU8(files['recent.html']);
-assert.match(recentHtml, /Content-Security-Policy/); assert.match(recentHtml, /src="recent\.js"/); assert.match(recentHtml, /href="recent\.css"/);
-const html = strFromU8(files['window.html']);
-assert.match(html, /Content-Security-Policy/);
-assert.match(html, /src="window\.js"/);
-assert.match(html, /href="window\.css"/);
+for (const page of ['window', 'recent']) {
+  const html = strFromU8(files[`${page}.html`]);
+  assert.match(html, /Content-Security-Policy/);
+  for (const [attribute, extension] of [['src', 'js'], ['href', 'css']]) {
+    const asset = `${page}.${extension}`;
+    const reference = html.match(new RegExp(`${attribute}="(${page}\\.${extension}[^"\\s]*)"`))?.[1];
+    assert(reference, `Missing ${asset} reference`);
+    const url = new URL(reference, 'https://package.invalid/');
+    const hash = createHash('sha256').update(files[asset]).digest('hex').slice(0, 16);
+    assert.equal(url.searchParams.get('v'), hash, `${asset} must invalidate stale caches when its contents change`);
+  }
+}
 console.log(JSON.stringify({ files: Object.keys(files).sort(), bytes: archive.length, sha256: createHash('sha256').update(archive).digest('hex'), result: 'PASS' }, null, 2));

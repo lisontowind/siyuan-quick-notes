@@ -6,9 +6,11 @@
 - `preview.png`：800×320 README 题头图，控制在 128 KiB 的项目体积预算内。
 - `assets/icon-source.png`、`assets/header-source.png`：生成原图。
 - `assets/icon-transparent-source.png`：清除图标圆角外绿色背景后的透明原图，当前集市图标由它缩小得到；原始图保留供追溯。
-- `assets/tray-16.png`、`assets/tray-32.png`、`assets/tray-48.png`：托盘尺寸；构建时封装为 ICO。
+- `assets/tray-16.png`、`assets/tray-32.png`、`assets/tray-48.png`：从透明原图导出的托盘尺寸；构建时封装为 ICO。
 
 首次提交集市时保留生成原图，缩小插件图标，并对题头图进行 PNG 调色板压缩，控制在集市要求的 512 KiB 以内，保持原构图与尺寸。
+
+2026-11-11（0.1.33）：托盘仍使用透明度修正前的旧素材，16/32/48 像素图片的四角 alpha 分别为 65/128/139/255、67/130/141/255、69/132/143/255，圆角外残留绿色背景。改用已有 `assets/icon-transparent-source.png`，通过 Windows System.Drawing 以 HighQualityBicubic、SourceCopy 和 TileFlipXY 导出 32 位 ARGB PNG，保留原图设计；三个尺寸的四角 alpha 均为 0。构建继续将这三张图封装为 Windows ICO，并将 32 像素图用于 Linux；macOS 单色模板保持现有设计。
 
 2026-10-16 优化安装包预览图：从保留的 `assets/header-source.png` 生成 800×320 的 `preview.png`，保留原构图、标题和副标题。使用 Sharp 缩放及 PNG 调色板编码，参数为 `quality: 80`、`dither: 0`、`compressionLevel: 9`、`effort: 10`；不添加构建依赖。预览图从 495,661 字节降至 97,627 字节，约减少 80.3%。安装包校验增加 128 KiB 的预览图体积预算，避免后续替换素材时意外增大。
 
