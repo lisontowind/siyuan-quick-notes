@@ -59,11 +59,9 @@ for (const readmeFile of ['README.md', 'README_en_US.md']) {
   for (const match of readme.matchAll(/!\[[^\]]*\]\(([^)]+)\)/g)) {
     const name = match[1];
     if (/^https:\/\//.test(name)) {
-      if (name.includes('/docs/images/')) {
-        assert.match(name, /^https:\/\/raw\.githubusercontent\.com\/lisontowind\/siyuan-quick-notes\/[a-f0-9]{40}\/docs\/images\/(?:en\/)?[\w-]+\.png$/, 'Documentation images must use immutable repository URLs');
-        const path = new URL(name).pathname.split('/').slice(4).join('/');
-        assert((await readFile(path)).length, `Missing source image: ${path}`);
-      }
+      const image = /^https:\/\/cdn\.jsdelivr\.net\/gh\/lisontowind\/siyuan-quick-notes@[a-f0-9]{40}\/((?:docs\/images\/(?:en\/)?[\w-]+|preview)\.png)$/.exec(name);
+      assert(image, 'README images must use immutable jsDelivr URLs');
+      assert((await readFile(image[1])).length, `Missing source image: ${image[1]}`);
       continue;
     }
     assert(!name.startsWith('docs/images/'), `README documentation image must use a public HTTPS URL: ${name}`);
