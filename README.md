@@ -1,4 +1,4 @@
-![悬浮速记：随手记下，回到思源](preview.png)
+![悬浮速记：随手记下，回到思源](https://cdn.jsdelivr.net/gh/lisontowind/siyuan-quick-notes@c25fee9348178bddb55fed775102802bda30331c/preview.png)
 
 **简体中文** · [English](README_en_US.md)
 
@@ -67,7 +67,7 @@
 2. 打开思源，在 **设置 → 集市 → 已下载 → 插件** 中启用“悬浮速记”。
 3. 点击顶栏的 **悬浮速记 → 速记设置**，在列表窗口的 **设置** 页确认保存位置。
 
-![保存位置图解：选择目标笔记本，填写目录模板，预览解析后的文档路径](https://raw.githubusercontent.com/lisontowind/siyuan-quick-notes/5b694913c9b46b4f5032035c49879cf2c0c39048/docs/images/03-storage.png)
+![保存位置图解：选择目标笔记本，填写目录模板，预览解析后的文档路径](https://cdn.jsdelivr.net/gh/lisontowind/siyuan-quick-notes@5b694913c9b46b4f5032035c49879cf2c0c39048/docs/images/03-storage.png)
 
 *设置图来自本版内置设置，展示按天汇集的示例模板；首次安装默认使用下面的时间戳模板。*
 
@@ -85,7 +85,7 @@
 
 ## 记下一个想法
 
-![便签操作图解：顶部编辑标题与置顶，正文即时渲染，底栏提供格式、新建与思源保存](https://raw.githubusercontent.com/lisontowind/siyuan-quick-notes/5b694913c9b46b4f5032035c49879cf2c0c39048/docs/images/01-window.png)
+![便签操作图解：顶部编辑标题与置顶，正文即时渲染，底栏提供格式、新建与思源保存](https://cdn.jsdelivr.net/gh/lisontowind/siyuan-quick-notes@5b694913c9b46b4f5032035c49879cf2c0c39048/docs/images/01-window.png)
 
 *便签图由当前版本界面代码渲染，正文为演示数据。顶部保留标题编辑、置顶、更多、最小化和关闭；新建与思源保存/打开位于右下角。*
 
@@ -107,7 +107,7 @@
 
 ### 插入截图和图片
 
-![图片插入图解：粘贴截图、选择文件或拖入图片，保留 Markdown 链接并在下方直接预览](https://raw.githubusercontent.com/lisontowind/siyuan-quick-notes/5b694913c9b46b4f5032035c49879cf2c0c39048/docs/images/02-images.png)
+![图片插入图解：粘贴截图、选择文件或拖入图片，保留 Markdown 链接并在下方直接预览](https://cdn.jsdelivr.net/gh/lisontowind/siyuan-quick-notes@5b694913c9b46b4f5032035c49879cf2c0c39048/docs/images/02-images.png)
 
 *配图来自本版即时渲染界面，使用插件图标作为示例图片；底栏可切换源码编辑图片链接。*
 
@@ -134,7 +134,7 @@
 
 ## 找回最近速记与草稿
 
-![恢复图解：搜索摘要、保存位置或时间，点击正式记录继续编辑，恢复本机草稿或上次打开的窗口](https://raw.githubusercontent.com/lisontowind/siyuan-quick-notes/5b694913c9b46b4f5032035c49879cf2c0c39048/docs/images/04-recovery.png)
+![恢复图解：搜索摘要、保存位置或时间，点击正式记录继续编辑，恢复本机草稿或上次打开的窗口](https://cdn.jsdelivr.net/gh/lisontowind/siyuan-quick-notes@5b694913c9b46b4f5032035c49879cf2c0c39048/docs/images/04-recovery.png)
 
 *列表图来自本版独立窗口，记录内容与时间为演示数据。*
 
@@ -150,7 +150,7 @@
 
 ### 分设备草稿与外机查看
 
-![外机草稿图解：只读预览已同步的完整正文，复制到本设备后继续编辑](https://raw.githubusercontent.com/lisontowind/siyuan-quick-notes/5b694913c9b46b4f5032035c49879cf2c0c39048/docs/images/06-devices.png)
+![外机草稿图解：只读预览已同步的完整正文，复制到本设备后继续编辑](https://cdn.jsdelivr.net/gh/lisontowind/siyuan-quick-notes@5b694913c9b46b4f5032035c49879cf2c0c39048/docs/images/06-devices.png)
 
 草稿正文按设备保存在 `storage/petal/siyuan-quick-notes/drafts/<设备标识>/`。本设备速记列表、自动恢复及整理统计只读取本机草稿；已保存到思源的记录继续共享。等待思源同步完成后，点击列表右上角 **更多 → 其他设备草稿**，可查看设备标识、摘要、最后修改时间与完整只读正文。
 
@@ -162,7 +162,7 @@
 
 默认累计 **100 条**时，每台设备每天最多轻提示一次，可在列表选择 **7 天后再提醒**。设置中的 **启用整理提醒、整理提醒条数、归档候选天数** 可调整这些行为；默认选择最后修改超过 **30 天**的便签，已打开或正在处理的条目跳过。仅重新打开、载入相同正文不会刷新修改时间。提醒不会自动删除内容。
 
-![整理图解：核对完整记录，选择归档或清除，确认未保存内容的处理](https://raw.githubusercontent.com/lisontowind/siyuan-quick-notes/5b694913c9b46b4f5032035c49879cf2c0c39048/docs/images/05-cleanup.png)
+![整理图解：核对完整记录，选择归档或清除，确认未保存内容的处理](https://cdn.jsdelivr.net/gh/lisontowind/siyuan-quick-notes@5b694913c9b46b4f5032035c49879cf2c0c39048/docs/images/05-cleanup.png)
 
 - **归档并移出插件**：先将未保存或待同步的最新内容写入思源，已有保存位置继续沿用；已同步的便签只核实原文可读取，不覆盖思源中的后续修改。逐条成功后清理插件正文副本、草稿和窗口记录，并同步移出其他设备的列表。之后请在思源查找，插件不再提供该条的副本恢复。
 - **直接从插件清除**：不先保存，默认不勾选有未保存内容的条目。主动勾选后，确认框会明确显示将永久丢弃本机未保存内容的条数。思源文档和图片始终保留。

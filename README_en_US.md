@@ -1,4 +1,4 @@
-![Quick Notes: Capture a thought. Return to SiYuan.](https://raw.githubusercontent.com/lisontowind/siyuan-quick-notes/3fedb25b03e2e597544e4c9d1adb1ab285c91a6b/docs/images/en/00-header.png)
+![Quick Notes: Capture a thought. Return to SiYuan.](https://cdn.jsdelivr.net/gh/lisontowind/siyuan-quick-notes@3fedb25b03e2e597544e4c9d1adb1ab285c91a6b/docs/images/en/00-header.png)
 
 [简体中文](README.md) · **English**
 
@@ -67,7 +67,7 @@ Deleting from the list opens confirmation inside that panel and propagates remov
 2. Open SiYuan and enable the plugin under **Settings → Marketplace → Downloaded → Plugins**.
 3. In SiYuan's top bar, open **Quick Notes (悬浮速记) → Quick note settings (速记设置)** and choose a save location in the recent window's **Settings** page.
 
-![Storage setup: select a notebook, enter a path template, and preview the resolved document path.](https://raw.githubusercontent.com/lisontowind/siyuan-quick-notes/5b694913c9b46b4f5032035c49879cf2c0c39048/docs/images/en/03-storage.png)
+![Storage setup: select a notebook, enter a path template, and preview the resolved document path.](https://cdn.jsdelivr.net/gh/lisontowind/siyuan-quick-notes@5b694913c9b46b4f5032035c49879cf2c0c39048/docs/images/en/03-storage.png)
 
 *The current embedded settings with a sample daily template. A fresh installation uses the timestamp template below.*
 
@@ -87,7 +87,7 @@ Use the **Settings gear** in the note list's upper-right corner to open embedded
 
 ## Capture a thought
 
-![Note window: toolbar actions, Markdown body, and save status.](https://raw.githubusercontent.com/lisontowind/siyuan-quick-notes/5b694913c9b46b4f5032035c49879cf2c0c39048/docs/images/en/01-window.png)
+![Note window: toolbar actions, Markdown body, and save status.](https://cdn.jsdelivr.net/gh/lisontowind/siyuan-quick-notes@5b694913c9b46b4f5032035c49879cf2c0c39048/docs/images/en/01-window.png)
 
 *The current English note window with sample content. Title editing, pin, More, minimize and close are at the top; New note and Save/Open in SiYuan are at the bottom right.*
 
@@ -109,7 +109,7 @@ Underline is stored as `<u>text</u>`, supported by SiYuan. Only paired, attribut
 
 ### Add screenshots and images
 
-![Images: paste a screenshot, choose a file, or drop an image; keep the Markdown link and view its preview below.](https://raw.githubusercontent.com/lisontowind/siyuan-quick-notes/5b694913c9b46b4f5032035c49879cf2c0c39048/docs/images/en/02-images.png)
+![Images: paste a screenshot, choose a file, or drop an image; keep the Markdown link and view its preview below.](https://cdn.jsdelivr.net/gh/lisontowind/siyuan-quick-notes@5b694913c9b46b4f5032035c49879cf2c0c39048/docs/images/en/02-images.png)
 
 *The current live-rendering editor, using the plugin icon as a sample image. Toggle source below to edit image links.*
 
@@ -138,7 +138,7 @@ The body is temporarily read-only during upload. Closing or reloading normally a
 
 ## Recover recent notes and drafts
 
-![Recovery: search by summary, path, or time; reopen saved notes, recover local drafts, and optionally restore windows.](https://raw.githubusercontent.com/lisontowind/siyuan-quick-notes/5b694913c9b46b4f5032035c49879cf2c0c39048/docs/images/en/04-recovery.png)
+![Recovery: search by summary, path, or time; reopen saved notes, recover local drafts, and optionally restore windows.](https://cdn.jsdelivr.net/gh/lisontowind/siyuan-quick-notes@5b694913c9b46b4f5032035c49879cf2c0c39048/docs/images/en/04-recovery.png)
 
 *The current independent note list with sample records and times.*
 
@@ -154,7 +154,7 @@ To put a note away temporarily, choose **More → Save draft and close (保存�
 
 ### Device-specific drafts and foreign previews
 
-![Foreign draft preview: read the complete synced body and copy it to this device before editing.](https://raw.githubusercontent.com/lisontowind/siyuan-quick-notes/5b694913c9b46b4f5032035c49879cf2c0c39048/docs/images/en/06-devices.png)
+![Foreign draft preview: read the complete synced body and copy it to this device before editing.](https://cdn.jsdelivr.net/gh/lisontowind/siyuan-quick-notes@5b694913c9b46b4f5032035c49879cf2c0c39048/docs/images/en/06-devices.png)
 
 Drafts live under `storage/petal/siyuan-quick-notes/drafts/<device ID>/`. The main list, automatic recovery and organization statistics use only this device’s drafts. Saved SiYuan references remain shared. After workspace sync finishes, choose **More → Other devices’ drafts** at the top right to preview a device identifier, summary, modification time and complete read-only body.
 
@@ -166,7 +166,7 @@ The note list footer shows all unarchived notes, notes not saved to SiYuan, and 
 
 The default reminder threshold is **100 notes**, with at most one brief reminder per day on each device. Choose **Remind me in 7 days** in the list to postpone it. Settings let you disable reminders or change the threshold and archive age. Archive selection defaults to notes last edited **more than 30 days ago**, skipping open or busy notes. Opening a note or loading unchanged content does not reset its edit time. Reminders never delete content automatically.
 
-![Organization: review the full collection, choose archive or clear, and confirm how unsaved content is handled.](https://raw.githubusercontent.com/lisontowind/siyuan-quick-notes/5b694913c9b46b4f5032035c49879cf2c0c39048/docs/images/en/05-cleanup.png)
+![Organization: review the full collection, choose archive or clear, and confirm how unsaved content is handled.](https://cdn.jsdelivr.net/gh/lisontowind/siyuan-quick-notes@5b694913c9b46b4f5032035c49879cf2c0c39048/docs/images/en/05-cleanup.png)
 
 - **Archive and remove from plugin** saves pending content to SiYuan using the existing destination, or verifies that an already-saved original can still be read without overwriting newer SiYuan edits. Each successful note is removed from every device’s list; local drafts, body copies and window recovery records are cleared. Find archived content in SiYuan afterward; plugin-copy recovery is no longer available for it.
 - **Clear from plugin** skips saving. Notes with unsaved content are unchecked by default. Selecting them explicitly displays the number of local unsaved notes that will be permanently discarded before confirmation. SiYuan documents and images are kept.
